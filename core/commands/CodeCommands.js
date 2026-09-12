@@ -1,5 +1,5 @@
 // core/commands/CodeCommands.js
-import { BaseCommand } from '../BaseCommand.js';
+import { BaseCommand } from './BaseCommand.js';
 
 export class CodeCommands extends BaseCommand {
     getCommands() {

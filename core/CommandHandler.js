@@ -167,25 +167,60 @@ export default class CommandHandler {
             args = result.args.concat(remainingArgs);
         }
 
-        console.log(`📨 أمر: "${command}" من ${name}`);
+        console.log(`📨 أمر: "${command}" من ${name} (${id})`);
 
-        // ✅ جلب اللاعب
+        // ✅ 1. فحص المدير
+        const isAdmin = await this.adminSystem.isAdminAsync(id);
+        
+        // ✅ 2. الأوامر الإدارية
+        if (isAdmin && this.adminEconomyCommands.getCommands()[command]) {
+            try {
+                let adminPlayer = await Player.findOne({ userId: id });
+                if (!adminPlayer) adminPlayer = await Player.createNew(id, name, platform);
+
+                const result = await this.adminEconomyCommands.getCommands()[command].call(
+                    this.adminEconomyCommands,
+                    adminPlayer,
+                    args,
+                    id
+                );
+
+                if (result === null || result === undefined) return null;
+                if (typeof result === 'string') {
+                    await adminPlayer.save();
+                }
+                return result;
+            } catch (error) {
+                console.error('❌ خطأ في أمر الأدمن:', error);
+                return `❌ خطأ: ${error.message}`;
+            }
+        }
+
+        // ✅ 3. جلب اللاعب
         let player = null;
         try {
             player = await Player.findOne({ userId: id });
 
             if (!player) {
-                if (command === 'بدء' || command === 'مساعدة') {
+                if (command === 'بدء' || command === 'مساعدة' || command === 'مدير') {
+                    if (isAdmin) return this.getAdminHelp();
                     return this.getWelcomeMessage();
                 }
-                return `❌ حسابك غير موجود.\n\n💡 سجّل في مغارة ريو أولاً:\n${this.gamePageUrl}`;
+                return `❌ حسابك غير موجود.
+
+🆔 معرّفك: ${id}
+
+💡 سجّل في مغارة ريو أولاً:
+${this.gamePageUrl}
+
+⚠️ ملاحظة: تأكد أنك تستخدم نفس حساب فيسبوك/تلغرام.`;
             }
         } catch (error) {
             console.error('❌ خطأ في جلب اللاعب:', error);
             return '❌ حدث خطأ.';
         }
 
-        // ✅ فحص السجن
+        // ✅ 4. فحص السجن
         if (player.isJailed && player.isJailed()) {
             if (!player.jailNotified) {
                 player.jailNotified = true;
@@ -201,22 +236,27 @@ export default class CommandHandler {
             return null;
         }
 
-        // ✅ فحص الحظر
+        // ✅ 5. فحص الحظر
         if (player.banned) {
             return '❌ تم حظرك من سوق ريو.';
         }
 
-        // ✅ فحص التسجيل
+        // ✅ 6. فحص التسجيل
         if (player.registrationStatus !== 'completed') {
             return `❌ حسابك غير مفعّل.\n\n💡 سجّل في مغارة ريو:\n${this.gamePageUrl}`;
         }
 
-        // ✅ الأوامر الأساسية
+        // ✅ 7. الأوامر الأساسية
         if (command === 'بدء' || command === 'مساعدة' || command === 'اوامر') {
+            if (isAdmin) return this.getAdminHelp();
             return this.getHelpMessage();
         }
 
-        // ✅ جرب الأمر
+        if (command === 'مدير' && isAdmin) {
+            return this.getAdminHelp();
+        }
+
+        // ✅ 8. جرب الأمر
         try {
             const normalizedCommand = this.normalizeCommand(command);
             const handler = this.commands[command] || this.commands[normalizedCommand];
@@ -231,7 +271,7 @@ export default class CommandHandler {
                 return result;
             }
 
-            return this.getUnknownMessage(command);
+            return this.getUnknownMessage(command, isAdmin);
         } catch (error) {
             console.error('❌ خطأ في معالجة الأمر:', error);
             return `❌ حدث خطأ: ${error.message}`;
@@ -262,7 +302,7 @@ ${this.gamePageUrl}
 • مساعدة - الأوامر كاملة`;
     }
 
-    // ✅ رسالة المساعدة
+    // ✅ رسالة المساعدة للاعب
     getHelpMessage() {
         return `🛒 سوق ريو - Souq Rio
 
@@ -286,11 +326,63 @@ ${this.gamePageUrl}
 ${this.gamePageUrl}`;
     }
 
-    // ✅ رسالة أمر غير معروف
-    getUnknownMessage(command) {
-        return `❓ أمر غير معروف: "${command}"
+    // ✅ رسالة المساعدة للأدمن
+    getAdminHelp() {
+        return `👑 أوامر الأدمن - سوق ريو
 
-💡 اكتب "مساعدة" للأوامر.
-🎮 للتسجيل: ${this.gamePageUrl}`;
+💰 الرصيد:
+• اضف_رصيد [ID] [المبلغ]
+• اسحب_رصيد [ID] [المبلغ]
+• تعديل_رصيد [ID] [المبلغ]
+
+🛒 المنتجات:
+• اضف_منتج [ID] [الاسم] [السعر] [النوع]
+• حذف_منتج [ID]
+• تعديل_منتج [ID] [الحقل] [القيمة]
+• قائمة_المنتجات
+• اضف_مخزون [ID] [الكمية]
+
+🎁 أكواد الهدايا:
+• اضف_كود [الكود] [المبلغ] [الاستخدامات] [المدة]
+• حذف_كود [الكود]
+• تعديل_كود [الكود] [الحقل] [القيمة]
+• قائمة_الاكواد
+
+🏷️ أكواد الخصم:
+• اضف_خصم [الكود] [النسبة] [الاستخدامات] [المدة]
+• حذف_خصم [الكود]
+• تعديل_خصم [الكود] [الحقل] [القيمة]
+• قائمة_الخصومات
+
+📊 الإحصائيات:
+• اقتصاد
+• اغنياء [صفحة]
+• فقراء [صفحة]
+• اقتصاد_لاعب [الاسم]
+• معاملات_لاعب [الاسم]
+
+🏦 الصندوق:
+• صندوق
+• اسحب_صندوق [المبلغ]
+• ايداع_صندوق [المبلغ]
+
+⚙️ الإعدادات:
+• اعدادات
+• تعديل_اعداد [المفتاح] [القيمة]
+• حذف_اعداد [المفتاح]
+
+💡 الأوامر تقبل أي شكل: اضف_رصيد | اضف رصيد | اضفرصيد`;
+    }
+
+    // ✅ رسالة أمر غير معروف
+    getUnknownMessage(command, isAdmin = false) {
+        let msg = `❓ أمر غير معروف: "${command}"\n\n`;
+        
+        if (isAdmin) {
+            msg += `💡 اكتب "مدير" للأوامر الإدارية.\n`;
+        }
+        
+        msg += `💡 اكتب "مساعدة" للأوامر.`;
+        return msg;
     }
 }

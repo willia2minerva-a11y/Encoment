@@ -16,8 +16,6 @@ import { CraftingCommands } from './commands/CraftingCommands.js';
 import { BattleCommands } from './commands/BattleCommands.js';
 import { AchievementCommands } from './commands/AchievementCommands.js';
 import { ReferralCommands } from './commands/ReferralCommands.js';
-
-// أوامر الاقتصاد (تعمل في كلا المستودعين)
 import { EconomyCommands } from './commands/EconomyCommands.js';
 
 export default class CommandHandler {
@@ -35,13 +33,14 @@ export default class CommandHandler {
             this.marketPageUrl = process.env.MARKET_PAGE_URL || 'https://facebook.com/SouqRio';
             this.gamePageUrl = process.env.GAME_PAGE_URL || 'https://facebook.com/MgaraRio';
 
-            // ✅ تحديد نوع المستودع (لعبة / سوق)
+            // ✅ تحديد وضع التشغيل
             this.isMarketMode = process.env.BOT_MODE === 'market';
+            console.log(`🎯 الوضع: ${this.isMarketMode ? 'سوق ريو' : 'مغارة ريو'}`);
 
             this.initCommandClasses();
             this.commands = this.collectAllCommands();
 
-            // ✅ أوامر التسجيل/الحساب المسموحة دائماً (حتى قبل التسجيل)
+            // ✅ أوامر التسجيل المسموحة دائماً
             this.alwaysAllowed = [
                 'بدء', 'ابدأ', 'ابدء', 'ابد', 'start',
                 'دخول', 'تسجيل دخول', 'تسجيل_دخول', 'تسجيلالدخول', 'لدي حساب', 'لدي_حساب', 'لديحساب',
@@ -52,26 +51,44 @@ export default class CommandHandler {
                 'معرفي', 'معرف', 'حسابي', 'معلوماتي'
             ];
 
-            // ✅ بدء تنظيف الجلسات الدورية
-            this.getSystem('account').then(acc => {
-                if (acc && acc.startCleanupInterval) acc.startCleanupInterval();
-            });
+            // ✅ تحميل AccountSystem مسبقاً والتأكد من وجوده
+            this.loadAccountSystem();
 
             console.log('✅ CommandHandler تم تهيئته');
             console.log('📋 الأوامر المسجلة:', Object.keys(this.commands).length);
-            console.log(`🎯 الوضع: ${this.isMarketMode ? 'سوق ريو' : 'مغارة ريو'}`);
         } catch (error) {
             console.error('❌ فشل التهيئة:', error);
             throw error;
         }
     }
 
+    // ✅ تحميل AccountSystem مسبقاً
+    async loadAccountSystem() {
+        console.log('🔍 التحقق من AccountSystem...');
+        const accountSystem = await SystemLoader.loadSystem('account');
+        if (accountSystem) {
+            this.systems['account'] = accountSystem;
+            if (typeof accountSystem.startCleanupInterval === 'function') {
+                accountSystem.startCleanupInterval();
+            }
+            console.log('✅ AccountSystem جاهز');
+        } else {
+            console.error('❌❌❌ AccountSystem لم يتم تحميله!');
+            console.error('تحقق من:');
+            console.error('1. وجود الملف: systems/account/AccountSystem.js');
+            console.error('2. وجود bcryptjs في package.json');
+            console.error('❌❌❌');
+        }
+    }
+
     initCommandClasses() {
         try {
+            // ✅ مشترك
             this.registrationCommands = new RegistrationCommands(this);
-            
+            this.economyCommands = new EconomyCommands(this);
+
+            // ✅ لعبة فقط
             if (!this.isMarketMode) {
-                // 🏰 أوامر اللعبة فقط
                 this.menuCommands = new MenuCommands(this);
                 this.infoCommands = new InfoCommands(this);
                 this.explorationCommands = new ExplorationCommands(this);
@@ -81,10 +98,7 @@ export default class CommandHandler {
                 this.achievementCommands = new AchievementCommands(this);
                 this.referralCommands = new ReferralCommands(this);
             }
-            
-            // 🛒 أوامر الاقتصاد (في كلا الوضعين لكن بتفصيل مختلف)
-            this.economyCommands = new EconomyCommands(this);
-            
+
             console.log('✅ تم تهيئة فئات الأوامر');
         } catch (error) {
             console.error('❌ خطأ في تهيئة الفئات:', error);
@@ -95,13 +109,10 @@ export default class CommandHandler {
     collectAllCommands() {
         const allCommands = {};
 
-        const commandSources = [
-            this.registrationCommands,
-            this.economyCommands
-        ];
+        const sources = [this.registrationCommands, this.economyCommands];
 
         if (!this.isMarketMode) {
-            commandSources.push(
+            sources.push(
                 this.menuCommands,
                 this.infoCommands,
                 this.explorationCommands,
@@ -113,7 +124,7 @@ export default class CommandHandler {
             );
         }
 
-        commandSources.forEach(source => {
+        sources.forEach(source => {
             if (source && typeof source.getCommands === 'function') {
                 const commands = source.getCommands();
                 if (commands) Object.assign(allCommands, commands);
@@ -125,40 +136,45 @@ export default class CommandHandler {
 
     async getSystem(systemName) {
         try {
-            if (!this.systems[systemName]) {
-                this.systems[systemName] = await SystemLoader.loadSystem(systemName);
-                if (!this.systems[systemName]) return null;
-                if (typeof this.systems[systemName].setCommandHandler === 'function') {
-                    this.systems[systemName].setCommandHandler(this);
-                }
+            // ✅ إذا كان محمّلاً مسبقاً
+            if (this.systems[systemName]) {
+                return this.systems[systemName];
             }
-            return this.systems[systemName];
+
+            // ✅ حمّله الآن
+            const system = await SystemLoader.loadSystem(systemName);
+            if (!system) {
+                console.error(`❌ getSystem('${systemName}') فشل`);
+                return null;
+            }
+
+            // ربط commandHandler
+            if (typeof system.setCommandHandler === 'function') {
+                system.setCommandHandler(this);
+            }
+
+            this.systems[systemName] = system;
+            return system;
         } catch (error) {
-            console.error(`❌ خطأ في تحميل ${systemName}:`, error);
+            console.error(`❌ خطأ في getSystem('${systemName}'):`, error);
             return null;
         }
     }
 
-    // ✅ تطبيع الأمر
     normalizeCommand(command) {
         if (!command) return command;
         return command.replace(/[_\s]/g, '');
     }
 
-    // ✅ فحص الأمر المركب
     isCompoundCommand(fullCommand) {
         const compound = [
-            'تسجيل دخول', 'تسجيل_دخول',
-            'تسجيل خروج', 'تسجيل_خروج',
-            'لدي حساب', 'لدي_حساب',
-            'حساب جديد', 'حساب_جديد',
+            'تسجيل دخول', 'تسجيل_دخول', 'تسجيل خروج', 'تسجيل_خروج',
+            'لدي حساب', 'لدي_حساب', 'حساب جديد', 'حساب_جديد',
             'اضف رصيد', 'اسحب رصيد', 'تعديل رصيد',
-            'اضف منتج', 'حذف منتج', 'تعديل منتج',
-            'قائمة المنتجات', 'اضف مخزون',
+            'اضف منتج', 'حذف منتج', 'تعديل منتج', 'قائمة المنتجات', 'اضف مخزون',
             'اضف كود', 'حذف كود', 'تعديل كود', 'قائمة الاكواد',
             'اضف خصم', 'حذف خصم', 'تعديل خصم', 'قائمة الخصومات',
-            'اسحب صندوق', 'ايداع صندوق',
-            'تعديل اعداد', 'حذف اعداد',
+            'اسحب صندوق', 'ايداع صندوق', 'تعديل اعداد', 'حذف اعداد',
             'اقتصاد لاعب', 'معاملات لاعب',
             'موافقة لاعب', 'اعطاء مورد', 'اعطاء ذهب', 'تغيير اسم',
             'زيادة صحة', 'زيادة مانا', 'اعادة بيانات', 'حظر لاعب',
@@ -243,10 +259,7 @@ export default class CommandHandler {
             'فرن كاملة': 'فرن_كاملة'
         };
 
-        return {
-            command: map[fullCommand] || fullCommand,
-            args: []
-        };
+        return { command: map[fullCommand] || fullCommand, args: [] };
     }
 
     // ===================================
@@ -283,40 +296,38 @@ export default class CommandHandler {
 
         console.log(`📨 أمر: "${command}" من ${name} (${id})`);
 
-        // ✅ جلب النظام
+        // ✅ جلب AccountSystem
         const accountSystem = await this.getSystem('account');
-        if (!accountSystem) return '❌ خطأ في النظام.';
+        if (!accountSystem) {
+            console.error('❌❌❌ AccountSystem غير متوفر!');
+            console.error('تحقق من systems/account/AccountSystem.js');
+            return '❌ خطأ في النظام.\n\n💡 حاول لاحقاً أو تواصل مع الإدارة.';
+        }
 
-        // ✅ تنظيف الجلسات القديمة
+        // ✅ تنظيف الجلسات
         accountSystem.cleanupOldSessions();
 
         // ✅ فحص قائمة المحظورين
-        const BannedPlayer = (await import('./models/BannedPlayer.js')).default;
-        const isBanned = await BannedPlayer.isBanned(id);
-        if (isBanned) {
-            // لا رد - فقط تجاهل
-            return null;
+        try {
+            const BannedPlayer = (await import('./models/BannedPlayer.js')).default;
+            const isBanned = await BannedPlayer.isBanned(id);
+            if (isBanned) return null;
+        } catch (e) {
+            // إذا لم يكن BannedPlayer موجوداً، تجاهل
         }
 
         // ✅ فحص جلسات التسجيل/الدخول
         if (accountSystem.hasRegistrationSession(id)) {
             const result = await accountSystem.handleRegistrationStep(id, message);
-            if (result.success && result.player) {
-                // تم إنشاء الحساب
-                return result.message;
-            }
             return result.error || result.message;
         }
 
         if (accountSystem.hasLoginSession(id)) {
             const result = await accountSystem.handleLoginStep(id, message);
-            if (result.success && result.player) {
-                return result.message;
-            }
             return result.error || result.message;
         }
 
-        // ✅ جلب اللاعب بمعرف المنصة
+        // ✅ جلب اللاعب
         let player = null;
         try {
             player = await Player.findByPlatform(id);
@@ -324,23 +335,14 @@ export default class CommandHandler {
             console.error('❌ خطأ في جلب اللاعب:', error);
         }
 
-        // ✅ فحص إذا كان لديه حساب
+        // ✅ ليس لديه حساب
         if (!player) {
-            // ليس لديه حساب
             return await this._handleNoAccount(sender, command, args);
         }
 
-        // ✅ فحص الجلسة (هل مسجل خروج؟)
+        // ✅ مسجل خروج
         if (!player.hasActiveSession(id)) {
-            // مسجل خروج
-            if (this.alwaysAllowed.includes(command) || 
-                ['دخول', 'تسجيل_دخول', 'بدء'].includes(command)) {
-                // اسمح له بأوامر الحساب
-                return await this._handleLoggedOut(player, sender, command, args);
-            }
-            return `🔒 أنت مسجل خروج.
-
-💡 اكتب "دخول" لتسجيل الدخول من جديد.`;
+            return await this._handleLoggedOut(player, sender, command, args);
         }
 
         // ✅ فحص السجن
@@ -361,16 +363,16 @@ export default class CommandHandler {
 
         // ✅ فحص الحظر
         if (player.banned) {
-            return '🚫 أنت محظور من استخدام البوت.';
+            return '🚫 أنت محظور.';
         }
 
-        // ✅ تحديث آخر نشاط
+        // ✅ تحديث النشاط
         player.updateLastActive(id);
 
         // ✅ فحص المدير
         const userIsAdmin = await this.adminSystem.isAdminAsync(id);
         if (userIsAdmin) {
-            const adminResult = await this.tryAdminCommand(command, args, id, player);
+            const adminResult = await this.handleAdminCommand(command, args, id, player);
             if (adminResult) return adminResult;
         }
 
@@ -399,27 +401,26 @@ export default class CommandHandler {
         }
     }
 
-    // ✅ معالجة اللاعب بدون حساب
+    // ✅ لا يوجد حساب
     async _handleNoAccount(sender, command, args) {
         const accountSystem = await this.getSystem('account');
         
-        // الأوامر المسموحة قبل التسجيل
-        const allowed = ['بدء', 'ابدأ', 'ابدء', 'ابد', 'start',
-                        'دخول', 'تسجيل_دخول', 'تسجيلالدخول', 'لدي_حساب', 'لديحساب',
-                        'انشاء', 'إنشاء', 'تسجيل', 'حساب_جديد', 'حسابجديد',
-                        'الغاء', 'إلغاء', 'cancel', '1', '2',
-                        'معرفي', 'معرف', 'مساعدة', 'اوامر', 'حالتي', 'حالة'];
+        const allowed = [
+            'بدء', 'ابدأ', 'ابدء', 'ابد', 'start',
+            'دخول', 'تسجيل_دخول', 'تسجيلالدخول', 'لدي_حساب', 'لديحساب',
+            'انشاء', 'إنشاء', 'تسجيل', 'حساب_جديد', 'حسابجديد',
+            'الغاء', 'إلغاء', 'cancel', '1', '2',
+            'معرفي', 'معرف', 'مساعدة', 'اوامر', 'حالتي', 'حالة'
+        ];
 
         if (!allowed.includes(command)) {
             return accountSystem.getWelcomeMessage(sender.platform || 'facebook');
         }
 
-        // تنفيذ الأمر
         const normalizedCommand = this.normalizeCommand(command);
         const handler = this.commands[command] || this.commands[normalizedCommand];
-        
+
         if (handler) {
-            // نمرر null كـ player (لأنه لا يوجد حساب)
             const fakePlayer = { platform: sender.platform, name: sender.name };
             const result = await handler.call(this, fakePlayer, args, sender.id);
             if (result === null || result === undefined) return null;
@@ -429,19 +430,16 @@ export default class CommandHandler {
         return accountSystem.getWelcomeMessage(sender.platform || 'facebook');
     }
 
-    // ✅ معالجة اللاعب المسجل خروج
+    // ✅ مسجل خروج
     async _handleLoggedOut(player, sender, command, args) {
-        const accountSystem = await this.getSystem('account');
-        
-        // الأوامر المسموحة
-        const allowed = ['بدء', 'ابدأ', 'دخول', 'تسجيل_دخول', 'تسجيلالدخول',
-                        'لدي_حساب', 'انشاء', 'إنشاء', 'تسجيل', 'حساب_جديد',
-                        'الغاء', 'إلغاء', 'cancel', '1', '2', 'مساعدة'];
+        const allowed = [
+            'بدء', 'ابدأ', 'دخول', 'تسجيل_دخول', 'تسجيلالدخول',
+            'لدي_حساب', 'انشاء', 'إنشاء', 'تسجيل', 'حساب_جديد',
+            'الغاء', 'إلغاء', 'cancel', '1', '2', 'مساعدة'
+        ];
 
         if (!allowed.includes(command)) {
-            return `🔒 أنت مسجل خروج.
-
-💡 اكتب "دخول" لتسجيل الدخول من جديد.`;
+            return `🔒 أنت مسجل خروج.\n\n💡 اكتب "دخول" لتسجيل الدخول.`;
         }
 
         const handler = this.commands[command] || this.commands[this.normalizeCommand(command)];
@@ -454,28 +452,22 @@ export default class CommandHandler {
         return `💡 اكتب "دخول" لتسجيل الدخول.`;
     }
 
-    // ✅ معالجة أوامر الأدمن
-    async tryAdminCommand(command, args, id, player) {
-        const result = await this.handleAdminCommand(command, args, id);
-        if (result) return result;
-
-        const normalized = this.normalizeCommand(command);
-        if (normalized !== command) {
-            return await this.handleAdminCommand(normalized, args, id);
-        }
-
-        return null;
-    }
-
-    async handleAdminCommand(command, args, userId) {
+    // ✅ أوامر الأدمن
+    async handleAdminCommand(command, args, userId, player) {
         try {
-            let player = await Player.findByPlatform(userId);
-            if (!player) return null;
-            
             const result = await this.adminSystem.handleAdminCommand(
                 command, args, userId, player, this.ARABIC_ITEM_MAP
             );
-            return result;
+            
+            if (result) return result;
+
+            const normalized = this.normalizeCommand(command);
+            if (normalized !== command) {
+                return await this.adminSystem.handleAdminCommand(
+                    normalized, args, userId, player, this.ARABIC_ITEM_MAP
+                );
+            }
+            return null;
         } catch (error) {
             console.error('❌ خطأ في أمر المدير:', error);
             return null;
@@ -498,16 +490,13 @@ export default class CommandHandler {
     // ✅ أمر غير معروف
     async handleUnknown(command, player, isAdmin = false) {
         if (this.isMarketMode) {
-            return `❓ أمر غير معروف: "${command}"
-
-💡 اكتب "مساعدة" للأوامر.
-🎮 للتسجيل: اكتب "بدء"`;
+            return `❓ أمر غير معروف: "${command}"\n\n💡 اكتب "مساعدة" للأوامر.`;
         }
 
         const gateHints = {
             'دخل': '💡 هل تقصد "ادخل [اسم البوابة]"؟',
             'استكشف': '💡 هل تقصد "استكشف"؟',
-            'اختر': '💡 هل تقصد "اختر [رقم]"؟ مثال: اختر 1',
+            'اختر': '💡 هل تقصد "اختر [رقم]"؟',
             'غادر': '💡 هل تقصد "مغادرة" أو "غادر"؟',
             'بوابة': '💡 هل تقصد "بوابات" أو "بوابتي"؟'
         };
@@ -520,4 +509,4 @@ export default class CommandHandler {
 
         return `❓ أمر غير معروف: "${command}"\n💡 اكتب "مساعدة" للقائمة الكاملة.`;
     }
-                }
+                    }

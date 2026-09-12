@@ -1,5 +1,5 @@
 // core/commands/ShopCommands.js
-import { BaseCommand } from '../BaseCommand.js';
+import { BaseCommand } from './BaseCommand.js';
 
 export class ShopCommands extends BaseCommand {
     getCommands() {

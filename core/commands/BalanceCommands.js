@@ -1,5 +1,5 @@
 // core/commands/BalanceCommands.js
-import { BaseCommand } from '../commands/BaseCommand.js';
+import { BaseCommand } from '../BaseCommand.js';
 
 export class BalanceCommands extends BaseCommand {
     getCommands() {

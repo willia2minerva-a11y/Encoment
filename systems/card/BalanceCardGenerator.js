@@ -40,7 +40,6 @@ export class BalanceCardGenerator {
         const height = this.HEIGHT;
 
         try {
-            // ✅ صورة الخلفية
             const backgroundFileName = 'balance_card.png';
             const backgroundPath = path.join(this.BACKGROUNDS_DIR, backgroundFileName);
 
@@ -48,7 +47,6 @@ export class BalanceCardGenerator {
             if (fs.existsSync(backgroundPath)) {
                 imageProcessor = sharp(backgroundPath).resize(width, height);
             } else {
-                // خلفية احتياطية - تدرج أزرق داكن
                 imageProcessor = sharp({
                     create: {
                         width,
@@ -61,46 +59,44 @@ export class BalanceCardGenerator {
 
             const layers = [];
 
-            // ✅ الاسم (ذهبي، كبير)
+            // ✅ الاسم (ذهبي)
             const playerName = (player.name || 'مستخدم').toUpperCase();
             layers.push({
                 input: this._generateSvgTextLayer(playerName, 50, width / 2, 100, '#FFD700', 'bold', 'middle'),
                 left: 0, top: 0
             });
 
-            // ✅ ID اللعبة (أبيض)
+            // ✅ ID (أبيض)
             const playerIdText = player.playerId || player.userId;
             layers.push({
                 input: this._generateSvgTextLayer(`ID: ${playerIdText}`, 30, width / 2, 180, '#FFFFFF', 'bold', 'middle'),
                 left: 0, top: 0
             });
 
-            // ✅ كلمة "الرصيد" 
+            // ✅ كلمة الرصيد
             layers.push({
                 input: this._generateSvgTextLayer('💰 الرصيد', 35, width / 2, 250, '#E0E0E0', 'bold', 'middle'),
                 left: 0, top: 0
             });
 
-            // ✅ الرصيد (ذهبي، كبير جداً)
+            // ✅ الرصيد (ذهبي)
             const balance = player.gold || 0;
             layers.push({
                 input: this._generateSvgTextLayer(`${balance} RIO`, 65, width / 2, 310, '#FFD700', 'bold', 'middle'),
                 left: 0, top: 0
             });
 
-            // ✅ شعار MGARA
+            // ✅ شعار سوق ريو
             layers.push({
-                input: this._generateSvgTextLayer('MGARA ECONOMY', 22, width / 2, 410, '#00BFFF', 'bold', 'middle'),
+                input: this._generateSvgTextLayer('SOUQ RIO - سوق ريو', 22, width / 2, 410, '#00BFFF', 'bold', 'middle'),
                 left: 0, top: 0
             });
 
-            // ✅ دمج الطبقات
             const outputBuffer = await imageProcessor
                 .composite(layers)
                 .png()
                 .toBuffer();
 
-            // ✅ حفظ
             const filename = `balance_${player.userId}_${Date.now()}.png`;
             const outputPath = path.join(this.OUTPUT_DIR, filename);
             await fs.promises.writeFile(outputPath, outputBuffer);
@@ -113,7 +109,6 @@ export class BalanceCardGenerator {
         }
     }
 
-    // ✅ تنظيف الملفات القديمة
     async cleanupOldFiles() {
         try {
             const files = fs.readdirSync(this.OUTPUT_DIR);

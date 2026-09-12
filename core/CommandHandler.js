@@ -1,13 +1,24 @@
 // core/CommandHandler.js
-import Player from './models/Player.js';
-import { BalanceCardGenerator } from '../systems/card/BalanceCardGenerator.js';
+// الموقع: مشترك - يُنسخ في مغارة ريو + سوق ريو
+import Player from './Player.js';
+import { ProfileCardGenerator } from '../utils/ProfileCardGenerator.js';
 import { AdminSystem } from '../systems/admin/AdminSystem.js';
-import { BalanceCommands } from './commands/BalanceCommands.js';
-import { ShopCommands } from './commands/ShopCommands.js';
-import { TransferCommands } from './commands/TransferCommands.js';
-import { CodeCommands } from './commands/CodeCommands.js';
-import { AdminEconomyCommands } from './commands/AdminEconomyCommands.js';
+import { RegistrationCommands } from './commands/RegistrationCommands.js';
 import { SystemLoader } from './utils/SystemLoader.js';
+import { ArabicItemMap } from './utils/ArabicItemMap.js';
+
+// استيرادات الأوامر
+import { MenuCommands } from './commands/MenuCommands.js';
+import { InfoCommands } from './commands/InfoCommands.js';
+import { ExplorationCommands } from './commands/ExplorationCommands.js';
+import { GateCommands } from './commands/GateCommands.js';
+import { CraftingCommands } from './commands/CraftingCommands.js';
+import { BattleCommands } from './commands/BattleCommands.js';
+import { AchievementCommands } from './commands/AchievementCommands.js';
+import { ReferralCommands } from './commands/ReferralCommands.js';
+
+// أوامر الاقتصاد (تعمل في كلا المستودعين)
+import { EconomyCommands } from './commands/EconomyCommands.js';
 
 export default class CommandHandler {
     constructor() {
@@ -15,21 +26,40 @@ export default class CommandHandler {
 
         try {
             this.adminSystem = new AdminSystem();
-            this.adminSystem.setCommandHandler(this);
-
-            this.cardGenerator = new BalanceCardGenerator();
+            this.cardGenerator = new ProfileCardGenerator();
             this.systems = {};
+            this.ARABIC_ITEM_MAP = ArabicItemMap.create();
 
             this.adminProfileUrl = process.env.ADMIN_PROFILE_URL || 'https://facebook.com/';
             this.adminDisplayName = process.env.ADMIN_DISPLAY_NAME || 'الإدارة';
+            this.marketPageUrl = process.env.MARKET_PAGE_URL || 'https://facebook.com/SouqRio';
             this.gamePageUrl = process.env.GAME_PAGE_URL || 'https://facebook.com/MgaraRio';
-            this.gameTelegramBot = process.env.GAME_TELEGRAM_BOT || '@MgaraRioBot';
+
+            // ✅ تحديد نوع المستودع (لعبة / سوق)
+            this.isMarketMode = process.env.BOT_MODE === 'market';
 
             this.initCommandClasses();
             this.commands = this.collectAllCommands();
 
+            // ✅ أوامر التسجيل/الحساب المسموحة دائماً (حتى قبل التسجيل)
+            this.alwaysAllowed = [
+                'بدء', 'ابدأ', 'ابدء', 'ابد', 'start',
+                'دخول', 'تسجيل دخول', 'تسجيل_دخول', 'تسجيلالدخول', 'لدي حساب', 'لدي_حساب', 'لديحساب',
+                'انشاء', 'إنشاء', 'تسجيل', 'حساب جديد', 'حساب_جديد', 'حسابجديد',
+                'الغاء', 'إلغاء', 'cancel',
+                'تسجيل خروج', 'تسجيل_خروج', 'تسجيلخروج', 'خروج', 'logout',
+                '1', '2',
+                'معرفي', 'معرف', 'حسابي', 'معلوماتي'
+            ];
+
+            // ✅ بدء تنظيف الجلسات الدورية
+            this.getSystem('account').then(acc => {
+                if (acc && acc.startCleanupInterval) acc.startCleanupInterval();
+            });
+
             console.log('✅ CommandHandler تم تهيئته');
             console.log('📋 الأوامر المسجلة:', Object.keys(this.commands).length);
+            console.log(`🎯 الوضع: ${this.isMarketMode ? 'سوق ريو' : 'مغارة ريو'}`);
         } catch (error) {
             console.error('❌ فشل التهيئة:', error);
             throw error;
@@ -38,11 +68,23 @@ export default class CommandHandler {
 
     initCommandClasses() {
         try {
-            this.balanceCommands = new BalanceCommands(this);
-            this.shopCommands = new ShopCommands(this);
-            this.transferCommands = new TransferCommands(this);
-            this.codeCommands = new CodeCommands(this);
-            this.adminEconomyCommands = new AdminEconomyCommands(this);
+            this.registrationCommands = new RegistrationCommands(this);
+            
+            if (!this.isMarketMode) {
+                // 🏰 أوامر اللعبة فقط
+                this.menuCommands = new MenuCommands(this);
+                this.infoCommands = new InfoCommands(this);
+                this.explorationCommands = new ExplorationCommands(this);
+                this.gateCommands = new GateCommands(this);
+                this.craftingCommands = new CraftingCommands(this);
+                this.battleCommands = new BattleCommands(this);
+                this.achievementCommands = new AchievementCommands(this);
+                this.referralCommands = new ReferralCommands(this);
+            }
+            
+            // 🛒 أوامر الاقتصاد (في كلا الوضعين لكن بتفصيل مختلف)
+            this.economyCommands = new EconomyCommands(this);
+            
             console.log('✅ تم تهيئة فئات الأوامر');
         } catch (error) {
             console.error('❌ خطأ في تهيئة الفئات:', error);
@@ -52,15 +94,26 @@ export default class CommandHandler {
 
     collectAllCommands() {
         const allCommands = {};
-        const sources = [
-            this.balanceCommands,
-            this.shopCommands,
-            this.transferCommands,
-            this.codeCommands,
-            this.adminEconomyCommands
+
+        const commandSources = [
+            this.registrationCommands,
+            this.economyCommands
         ];
 
-        sources.forEach(source => {
+        if (!this.isMarketMode) {
+            commandSources.push(
+                this.menuCommands,
+                this.infoCommands,
+                this.explorationCommands,
+                this.gateCommands,
+                this.craftingCommands,
+                this.battleCommands,
+                this.achievementCommands,
+                this.referralCommands
+            );
+        }
+
+        commandSources.forEach(source => {
             if (source && typeof source.getCommands === 'function') {
                 const commands = source.getCommands();
                 if (commands) Object.assign(allCommands, commands);
@@ -95,6 +148,10 @@ export default class CommandHandler {
     // ✅ فحص الأمر المركب
     isCompoundCommand(fullCommand) {
         const compound = [
+            'تسجيل دخول', 'تسجيل_دخول',
+            'تسجيل خروج', 'تسجيل_خروج',
+            'لدي حساب', 'لدي_حساب',
+            'حساب جديد', 'حساب_جديد',
             'اضف رصيد', 'اسحب رصيد', 'تعديل رصيد',
             'اضف منتج', 'حذف منتج', 'تعديل منتج',
             'قائمة المنتجات', 'اضف مخزون',
@@ -102,13 +159,28 @@ export default class CommandHandler {
             'اضف خصم', 'حذف خصم', 'تعديل خصم', 'قائمة الخصومات',
             'اسحب صندوق', 'ايداع صندوق',
             'تعديل اعداد', 'حذف اعداد',
-            'اقتصاد لاعب', 'معاملات لاعب'
+            'اقتصاد لاعب', 'معاملات لاعب',
+            'موافقة لاعب', 'اعطاء مورد', 'اعطاء ذهب', 'تغيير اسم',
+            'زيادة صحة', 'زيادة مانا', 'اعادة بيانات', 'حظر لاعب',
+            'تغيير جنس', 'عرض الردود', 'حذف طلب سحب', 'نزع ادمن',
+            'قائمة المحظورين', 'حذف محظور', 'عرض لاعبين',
+            'اضف رد', 'ازل رد', 'اضف مهمة', 'حذف مهمة', 'قائمة المهام',
+            'اضف سلاح', 'حذف سلاح', 'اضف وحش', 'حذف وحش',
+            'اضف مورد', 'حذف مورد', 'عرض اسلحة', 'عرض وحوش',
+            'عرض مواقع', 'عرض موارد',
+            'اعطاء ادمن', 'ازالة ادمن', 'اعطاء صلاحية', 'ازالة صلاحية',
+            'قائمة الادمن', 'قائمة المسجونين',
+            'صناعة كاملة', 'فرن كاملة'
         ];
         return compound.includes(fullCommand);
     }
 
     handleCompoundCommand(fullCommand) {
         const map = {
+            'تسجيل دخول': 'تسجيل_دخول',
+            'تسجيل خروج': 'تسجيل_خروج',
+            'لدي حساب': 'لدي_حساب',
+            'حساب جديد': 'حساب_جديد',
             'اضف رصيد': 'اضف_رصيد',
             'اسحب رصيد': 'اسحب_رصيد',
             'تعديل رصيد': 'تعديل_رصيد',
@@ -130,7 +202,45 @@ export default class CommandHandler {
             'تعديل اعداد': 'تعديل_اعداد',
             'حذف اعداد': 'حذف_اعداد',
             'اقتصاد لاعب': 'اقتصاد_لاعب',
-            'معاملات لاعب': 'معاملات_لاعب'
+            'معاملات لاعب': 'معاملات_لاعب',
+            'موافقة لاعب': 'موافقة_لاعب',
+            'اعطاء مورد': 'اعطاء_مورد',
+            'اعطاء ذهب': 'اعطاء_ذهب',
+            'تغيير اسم': 'تغيير_اسم',
+            'زيادة صحة': 'زيادة_صحة',
+            'زيادة مانا': 'زيادة_مانا',
+            'اعادة بيانات': 'اعادة_بيانات',
+            'حظر لاعب': 'حظر_لاعب',
+            'تغيير جنس': 'تغيير_جنس',
+            'عرض الردود': 'عرض_الردود',
+            'حذف طلب سحب': 'حذف_طلب_سحب',
+            'نزع ادمن': 'نزع_ادمن',
+            'قائمة المحظورين': 'قائمة_المحظورين',
+            'حذف محظور': 'حذف_محظور',
+            'عرض لاعبين': 'عرض_لاعبين',
+            'اضف رد': 'اضف_رد',
+            'ازل رد': 'ازل_رد',
+            'اضف مهمة': 'اضف_مهمة',
+            'حذف مهمة': 'حذف_مهمة',
+            'قائمة المهام': 'قائمة_المهام',
+            'اضف سلاح': 'اضف_سلاح',
+            'حذف سلاح': 'حذف_سلاح',
+            'اضف وحش': 'اضف_وحش',
+            'حذف وحش': 'حذف_وحش',
+            'اضف مورد': 'اضف_مورد',
+            'حذف مورد': 'حذف_مورد',
+            'عرض اسلحة': 'عرض_اسلحة',
+            'عرض وحوش': 'عرض_وحوش',
+            'عرض مواقع': 'عرض_مواقع',
+            'عرض موارد': 'عرض_موارد',
+            'اعطاء ادمن': 'اعطاء_ادمن',
+            'ازالة ادمن': 'ازالة_ادمن',
+            'اعطاء صلاحية': 'اعطاء_صلاحية',
+            'ازالة صلاحية': 'ازالة_صلاحية',
+            'قائمة الادمن': 'قائمة_الادمن',
+            'قائمة المسجونين': 'قائمة_المسجونين',
+            'صناعة كاملة': 'صناعة_كاملة',
+            'فرن كاملة': 'فرن_كاملة'
         };
 
         return {
@@ -139,10 +249,14 @@ export default class CommandHandler {
         };
     }
 
-    // ✅ معالج رئيسي
+    // ===================================
+    // المعالج الرئيسي
+    // ===================================
     async process(sender, message) {
         const { id, name, platform } = sender;
         const processedMessage = message.trim().toLowerCase();
+
+        if (!processedMessage) return null;
 
         let commandParts = processedMessage.split(/\s+/);
         let command = commandParts[0];
@@ -169,59 +283,68 @@ export default class CommandHandler {
 
         console.log(`📨 أمر: "${command}" من ${name} (${id})`);
 
-        // ✅ 1. فحص المدير
-        const isAdmin = await this.adminSystem.isAdminAsync(id);
-        
-        // ✅ 2. الأوامر الإدارية
-        if (isAdmin && this.adminEconomyCommands.getCommands()[command]) {
-            try {
-                let adminPlayer = await Player.findOne({ userId: id });
-                if (!adminPlayer) adminPlayer = await Player.createNew(id, name, platform);
+        // ✅ جلب النظام
+        const accountSystem = await this.getSystem('account');
+        if (!accountSystem) return '❌ خطأ في النظام.';
 
-                const result = await this.adminEconomyCommands.getCommands()[command].call(
-                    this.adminEconomyCommands,
-                    adminPlayer,
-                    args,
-                    id
-                );
+        // ✅ تنظيف الجلسات القديمة
+        accountSystem.cleanupOldSessions();
 
-                if (result === null || result === undefined) return null;
-                if (typeof result === 'string') {
-                    await adminPlayer.save();
-                }
-                return result;
-            } catch (error) {
-                console.error('❌ خطأ في أمر الأدمن:', error);
-                return `❌ خطأ: ${error.message}`;
-            }
+        // ✅ فحص قائمة المحظورين
+        const BannedPlayer = (await import('./models/BannedPlayer.js')).default;
+        const isBanned = await BannedPlayer.isBanned(id);
+        if (isBanned) {
+            // لا رد - فقط تجاهل
+            return null;
         }
 
-        // ✅ 3. جلب اللاعب
+        // ✅ فحص جلسات التسجيل/الدخول
+        if (accountSystem.hasRegistrationSession(id)) {
+            const result = await accountSystem.handleRegistrationStep(id, message);
+            if (result.success && result.player) {
+                // تم إنشاء الحساب
+                return result.message;
+            }
+            return result.error || result.message;
+        }
+
+        if (accountSystem.hasLoginSession(id)) {
+            const result = await accountSystem.handleLoginStep(id, message);
+            if (result.success && result.player) {
+                return result.message;
+            }
+            return result.error || result.message;
+        }
+
+        // ✅ جلب اللاعب بمعرف المنصة
         let player = null;
         try {
-            player = await Player.findOne({ userId: id });
-
-            if (!player) {
-                if (command === 'بدء' || command === 'مساعدة' || command === 'مدير') {
-                    if (isAdmin) return this.getAdminHelp();
-                    return this.getWelcomeMessage();
-                }
-                return `❌ حسابك غير موجود.
-
-🆔 معرّفك: ${id}
-
-💡 سجّل في مغارة ريو أولاً:
-${this.gamePageUrl}
-
-⚠️ ملاحظة: تأكد أنك تستخدم نفس حساب فيسبوك/تلغرام.`;
-            }
+            player = await Player.findByPlatform(id);
         } catch (error) {
             console.error('❌ خطأ في جلب اللاعب:', error);
-            return '❌ حدث خطأ.';
         }
 
-        // ✅ 4. فحص السجن
-        if (player.isJailed && player.isJailed()) {
+        // ✅ فحص إذا كان لديه حساب
+        if (!player) {
+            // ليس لديه حساب
+            return await this._handleNoAccount(sender, command, args);
+        }
+
+        // ✅ فحص الجلسة (هل مسجل خروج؟)
+        if (!player.hasActiveSession(id)) {
+            // مسجل خروج
+            if (this.alwaysAllowed.includes(command) || 
+                ['دخول', 'تسجيل_دخول', 'بدء'].includes(command)) {
+                // اسمح له بأوامر الحساب
+                return await this._handleLoggedOut(player, sender, command, args);
+            }
+            return `🔒 أنت مسجل خروج.
+
+💡 اكتب "دخول" لتسجيل الدخول من جديد.`;
+        }
+
+        // ✅ فحص السجن
+        if (player.isJailed()) {
             if (!player.jailNotified) {
                 player.jailNotified = true;
                 await player.save();
@@ -236,34 +359,32 @@ ${this.gamePageUrl}
             return null;
         }
 
-        // ✅ 5. فحص الحظر
+        // ✅ فحص الحظر
         if (player.banned) {
-            return '❌ تم حظرك من سوق ريو.';
+            return '🚫 أنت محظور من استخدام البوت.';
         }
 
-        // ✅ 6. فحص التسجيل
-        if (player.registrationStatus !== 'completed') {
-            return `❌ حسابك غير مفعّل.\n\n💡 سجّل في مغارة ريو:\n${this.gamePageUrl}`;
+        // ✅ تحديث آخر نشاط
+        player.updateLastActive(id);
+
+        // ✅ فحص المدير
+        const userIsAdmin = await this.adminSystem.isAdminAsync(id);
+        if (userIsAdmin) {
+            const adminResult = await this.tryAdminCommand(command, args, id, player);
+            if (adminResult) return adminResult;
         }
 
-        // ✅ 7. الأوامر الأساسية
-        if (command === 'بدء' || command === 'مساعدة' || command === 'اوامر') {
-            if (isAdmin) return this.getAdminHelp();
-            return this.getHelpMessage();
-        }
+        // ✅ الردود التلقائية
+        const autoResponse = await this.handleAutoResponse(message);
+        if (autoResponse) return autoResponse;
 
-        if (command === 'مدير' && isAdmin) {
-            return this.getAdminHelp();
-        }
-
-        // ✅ 8. جرب الأمر
+        // ✅ تنفيذ الأمر
         try {
             const normalizedCommand = this.normalizeCommand(command);
             const handler = this.commands[command] || this.commands[normalizedCommand];
 
             if (handler) {
                 const result = await handler.call(this, player, args, id);
-
                 if (result === null || result === undefined) return null;
                 if (typeof result === 'string') {
                     await player.save();
@@ -271,118 +392,132 @@ ${this.gamePageUrl}
                 return result;
             }
 
-            return this.getUnknownMessage(command, isAdmin);
+            return await this.handleUnknown(command, player, userIsAdmin);
         } catch (error) {
             console.error('❌ خطأ في معالجة الأمر:', error);
             return `❌ حدث خطأ: ${error.message}`;
         }
     }
 
-    // ✅ رسالة الترحيب
-    getWelcomeMessage() {
-        return `🛒 مرحباً بك في سوق ريو - Souq Rio
-
-📖 السوق الرسمي للعبة مغارة ريو
-
-💡 ماذا تجد هنا:
-• عرض رصيدك
-• شراء منتجات
-• تحويل الريو
-• استخدام أكواد الخصم والهدايا
-• بطاقة رصيد مصورة
-
-⚠️ للتسجيل واللعب:
-🎮 مغارة ريو
-${this.gamePageUrl}
-
-📋 أوامرك:
-• رصيد - عرض رصيدك
-• متجر - عرض المنتجات
-• تحويل - تحويل لأي لاعب
-• مساعدة - الأوامر كاملة`;
-    }
-
-    // ✅ رسالة المساعدة للاعب
-    getHelpMessage() {
-        return `🛒 سوق ريو - Souq Rio
-
-📊 الرصيد:
-• رصيد - عرض رصيدك
-• بطاقة - بطاقة رصيد مصورة
-• معاملاتي - سجل معاملاتك
-
-🛒 المتجر:
-• متجر [صفحة] - عرض المنتجات
-• شراء [ID] - شراء منتج
-
-💸 التحويل:
-• تحويل [الاسم] [المبلغ]
-
-🎁 الأكواد:
-• هدية [الكود] - كود هدية
-• خصم [الكود] - كود خصم
-
-🎮 للعب والتسجيل:
-${this.gamePageUrl}`;
-    }
-
-    // ✅ رسالة المساعدة للأدمن
-    getAdminHelp() {
-        return `👑 أوامر الأدمن - سوق ريو
-
-💰 الرصيد:
-• اضف_رصيد [ID] [المبلغ]
-• اسحب_رصيد [ID] [المبلغ]
-• تعديل_رصيد [ID] [المبلغ]
-
-🛒 المنتجات:
-• اضف_منتج [ID] [الاسم] [السعر] [النوع]
-• حذف_منتج [ID]
-• تعديل_منتج [ID] [الحقل] [القيمة]
-• قائمة_المنتجات
-• اضف_مخزون [ID] [الكمية]
-
-🎁 أكواد الهدايا:
-• اضف_كود [الكود] [المبلغ] [الاستخدامات] [المدة]
-• حذف_كود [الكود]
-• تعديل_كود [الكود] [الحقل] [القيمة]
-• قائمة_الاكواد
-
-🏷️ أكواد الخصم:
-• اضف_خصم [الكود] [النسبة] [الاستخدامات] [المدة]
-• حذف_خصم [الكود]
-• تعديل_خصم [الكود] [الحقل] [القيمة]
-• قائمة_الخصومات
-
-📊 الإحصائيات:
-• اقتصاد
-• اغنياء [صفحة]
-• فقراء [صفحة]
-• اقتصاد_لاعب [الاسم]
-• معاملات_لاعب [الاسم]
-
-🏦 الصندوق:
-• صندوق
-• اسحب_صندوق [المبلغ]
-• ايداع_صندوق [المبلغ]
-
-⚙️ الإعدادات:
-• اعدادات
-• تعديل_اعداد [المفتاح] [القيمة]
-• حذف_اعداد [المفتاح]
-
-💡 الأوامر تقبل أي شكل: اضف_رصيد | اضف رصيد | اضفرصيد`;
-    }
-
-    // ✅ رسالة أمر غير معروف
-    getUnknownMessage(command, isAdmin = false) {
-        let msg = `❓ أمر غير معروف: "${command}"\n\n`;
+    // ✅ معالجة اللاعب بدون حساب
+    async _handleNoAccount(sender, command, args) {
+        const accountSystem = await this.getSystem('account');
         
-        if (isAdmin) {
-            msg += `💡 اكتب "مدير" للأوامر الإدارية.\n`;
+        // الأوامر المسموحة قبل التسجيل
+        const allowed = ['بدء', 'ابدأ', 'ابدء', 'ابد', 'start',
+                        'دخول', 'تسجيل_دخول', 'تسجيلالدخول', 'لدي_حساب', 'لديحساب',
+                        'انشاء', 'إنشاء', 'تسجيل', 'حساب_جديد', 'حسابجديد',
+                        'الغاء', 'إلغاء', 'cancel', '1', '2',
+                        'معرفي', 'معرف', 'مساعدة', 'اوامر', 'حالتي', 'حالة'];
+
+        if (!allowed.includes(command)) {
+            return accountSystem.getWelcomeMessage(sender.platform || 'facebook');
         }
+
+        // تنفيذ الأمر
+        const normalizedCommand = this.normalizeCommand(command);
+        const handler = this.commands[command] || this.commands[normalizedCommand];
         
-        msg += `💡 اكتب "مساعدة" للأوامر.`;
-        return msg;
+        if (handler) {
+            // نمرر null كـ player (لأنه لا يوجد حساب)
+            const fakePlayer = { platform: sender.platform, name: sender.name };
+            const result = await handler.call(this, fakePlayer, args, sender.id);
+            if (result === null || result === undefined) return null;
+            return typeof result === 'string' ? result : result.message;
+        }
+
+        return accountSystem.getWelcomeMessage(sender.platform || 'facebook');
     }
-}
+
+    // ✅ معالجة اللاعب المسجل خروج
+    async _handleLoggedOut(player, sender, command, args) {
+        const accountSystem = await this.getSystem('account');
+        
+        // الأوامر المسموحة
+        const allowed = ['بدء', 'ابدأ', 'دخول', 'تسجيل_دخول', 'تسجيلالدخول',
+                        'لدي_حساب', 'انشاء', 'إنشاء', 'تسجيل', 'حساب_جديد',
+                        'الغاء', 'إلغاء', 'cancel', '1', '2', 'مساعدة'];
+
+        if (!allowed.includes(command)) {
+            return `🔒 أنت مسجل خروج.
+
+💡 اكتب "دخول" لتسجيل الدخول من جديد.`;
+        }
+
+        const handler = this.commands[command] || this.commands[this.normalizeCommand(command)];
+        if (handler) {
+            const result = await handler.call(this, player, args, sender.id);
+            if (result === null || result === undefined) return null;
+            return typeof result === 'string' ? result : result.message;
+        }
+
+        return `💡 اكتب "دخول" لتسجيل الدخول.`;
+    }
+
+    // ✅ معالجة أوامر الأدمن
+    async tryAdminCommand(command, args, id, player) {
+        const result = await this.handleAdminCommand(command, args, id);
+        if (result) return result;
+
+        const normalized = this.normalizeCommand(command);
+        if (normalized !== command) {
+            return await this.handleAdminCommand(normalized, args, id);
+        }
+
+        return null;
+    }
+
+    async handleAdminCommand(command, args, userId) {
+        try {
+            let player = await Player.findByPlatform(userId);
+            if (!player) return null;
+            
+            const result = await this.adminSystem.handleAdminCommand(
+                command, args, userId, player, this.ARABIC_ITEM_MAP
+            );
+            return result;
+        } catch (error) {
+            console.error('❌ خطأ في أمر المدير:', error);
+            return null;
+        }
+    }
+
+    // ✅ الردود التلقائية
+    async handleAutoResponse(message) {
+        try {
+            const autoResponseSys = await this.getSystem('autoResponse');
+            if (autoResponseSys && typeof autoResponseSys.findAutoResponse === 'function') {
+                return autoResponseSys.findAutoResponse(message);
+            }
+        } catch (error) {
+            console.error('❌ خطأ في الرد التلقائي:', error);
+        }
+        return null;
+    }
+
+    // ✅ أمر غير معروف
+    async handleUnknown(command, player, isAdmin = false) {
+        if (this.isMarketMode) {
+            return `❓ أمر غير معروف: "${command}"
+
+💡 اكتب "مساعدة" للأوامر.
+🎮 للتسجيل: اكتب "بدء"`;
+        }
+
+        const gateHints = {
+            'دخل': '💡 هل تقصد "ادخل [اسم البوابة]"؟',
+            'استكشف': '💡 هل تقصد "استكشف"؟',
+            'اختر': '💡 هل تقصد "اختر [رقم]"؟ مثال: اختر 1',
+            'غادر': '💡 هل تقصد "مغادرة" أو "غادر"؟',
+            'بوابة': '💡 هل تقصد "بوابات" أو "بوابتي"؟'
+        };
+
+        for (const [hintCommand, hintMessage] of Object.entries(gateHints)) {
+            if (command.includes(hintCommand)) {
+                return `${hintMessage}\n\n❓ أمر غير معروف: "${command}"\nاكتب "مساعدة" للقائمة الكاملة.`;
+            }
+        }
+
+        return `❓ أمر غير معروف: "${command}"\n💡 اكتب "مساعدة" للقائمة الكاملة.`;
+    }
+                }

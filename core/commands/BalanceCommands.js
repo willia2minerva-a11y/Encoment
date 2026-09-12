@@ -1,6 +1,6 @@
 // core/commands/BalanceCommands.js
 import { BaseCommand } from './BaseCommand.js';
-
+import Player from '../models/Player.js';  // ← نقطة واحدة، ثم models
 export class BalanceCommands extends BaseCommand {
     getCommands() {
         return {

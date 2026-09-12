@@ -22,7 +22,8 @@ export default class CommandHandler {
 
             this.adminProfileUrl = process.env.ADMIN_PROFILE_URL || 'https://facebook.com/';
             this.adminDisplayName = process.env.ADMIN_DISPLAY_NAME || 'الإدارة';
-            this.gamePageUrl = process.env.GAME_PAGE_URL || 'https://facebook.com/MGARA-Game';
+            this.gamePageUrl = process.env.GAME_PAGE_URL || 'https://facebook.com/MgaraRio';
+            this.gameTelegramBot = process.env.GAME_TELEGRAM_BOT || '@MgaraRioBot';
 
             this.initCommandClasses();
             this.commands = this.collectAllCommands();
@@ -172,13 +173,12 @@ export default class CommandHandler {
         let player = null;
         try {
             player = await Player.findOne({ userId: id });
-            
+
             if (!player) {
-                // اللاعب غير مسجل
                 if (command === 'بدء' || command === 'مساعدة') {
                     return this.getWelcomeMessage();
                 }
-                return `❌ حسابك غير موجود.\n\n💡 سجّل في صفحة المغارة أولاً:\n${this.gamePageUrl}`;
+                return `❌ حسابك غير موجود.\n\n💡 سجّل في مغارة ريو أولاً:\n${this.gamePageUrl}`;
             }
         } catch (error) {
             console.error('❌ خطأ في جلب اللاعب:', error);
@@ -198,17 +198,17 @@ export default class CommandHandler {
 
                 return `${timeStr}\n\n📝 السبب: ${player.jailedReason || 'غير محدد'}`;
             }
-            return null; // لا رد
+            return null;
         }
 
         // ✅ فحص الحظر
         if (player.banned) {
-            return '❌ تم حظرك من اللعبة.';
+            return '❌ تم حظرك من سوق ريو.';
         }
 
         // ✅ فحص التسجيل
         if (player.registrationStatus !== 'completed') {
-            return `❌ حسابك غير مفعّل.\n\n💡 سجّل في صفحة المغارة:\n${this.gamePageUrl}`;
+            return `❌ حسابك غير مفعّل.\n\n💡 سجّل في مغارة ريو:\n${this.gamePageUrl}`;
         }
 
         // ✅ الأوامر الأساسية
@@ -216,7 +216,7 @@ export default class CommandHandler {
             return this.getHelpMessage();
         }
 
-        // ✅ جرب الأمر مباشرة
+        // ✅ جرب الأمر
         try {
             const normalizedCommand = this.normalizeCommand(command);
             const handler = this.commands[command] || this.commands[normalizedCommand];
@@ -240,17 +240,19 @@ export default class CommandHandler {
 
     // ✅ رسالة الترحيب
     getWelcomeMessage() {
-        return `💰 مرحباً بك في MGARA Economy
+        return `🛒 مرحباً بك في سوق ريو - Souq Rio
 
-📖 صفحة الاقتصاد الرسمية للعبة المغارة
+📖 السوق الرسمي للعبة مغارة ريو
 
 💡 ماذا تجد هنا:
 • عرض رصيدك
 • شراء منتجات
 • تحويل الريو
-• استخدام أكواد الخصم
+• استخدام أكواد الخصم والهدايا
+• بطاقة رصيد مصورة
 
 ⚠️ للتسجيل واللعب:
+🎮 مغارة ريو
 ${this.gamePageUrl}
 
 📋 أوامرك:
@@ -262,7 +264,7 @@ ${this.gamePageUrl}
 
     // ✅ رسالة المساعدة
     getHelpMessage() {
-        return `💰 MGARA Economy - المساعدة
+        return `🛒 سوق ريو - Souq Rio
 
 📊 الرصيد:
 • رصيد - عرض رصيدك
@@ -277,10 +279,10 @@ ${this.gamePageUrl}
 • تحويل [الاسم] [المبلغ]
 
 🎁 الأكواد:
-• هدية [الكود] - استخدام كود هدية
-• خصم [الكود] - تفعيل كود خصم
+• هدية [الكود] - كود هدية
+• خصم [الكود] - كود خصم
 
-💡 للعب والتسجيل:
+🎮 للعب والتسجيل:
 ${this.gamePageUrl}`;
     }
 
@@ -289,6 +291,6 @@ ${this.gamePageUrl}`;
         return `❓ أمر غير معروف: "${command}"
 
 💡 اكتب "مساعدة" للأوامر.
-💡 للعب: ${this.gamePageUrl}`;
+🎮 للتسجيل: ${this.gamePageUrl}`;
     }
-    }
+}

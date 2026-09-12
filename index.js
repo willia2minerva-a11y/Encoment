@@ -1,4 +1,3 @@
-// index.js
 import mongoose from 'mongoose';
 import 'dotenv/config';
 import express from 'express';
@@ -114,7 +113,6 @@ async function handleMessage(senderId, message) {
 
         const response = await commandHandler.process(sender, message);
 
-        // ✅ إذا رجع null (سجن أو لا رد)
         if (response === null || response === undefined) {
             return;
         }
@@ -174,8 +172,8 @@ app.post('/webhook', async (req, res) => {
 // Health check
 app.get('/', (req, res) => {
     res.status(200).json({
-        status: '✅ MGARA Economy يعمل',
-        name: 'MGARA Economy',
+        status: '✅ البوت يعمل',
+        name: 'سوق ريو - Souq Rio',
         version: '1.0.0'
     });
 });
@@ -191,7 +189,7 @@ process.on('uncaughtException', (error) => {
 
 // الدالة الرئيسية
 async function main() {
-    console.log('🚀 بدء تشغيل MGARA Economy...');
+    console.log('🚀 بدء تشغيل سوق ريو - Souq Rio...');
 
     try {
         await connectDatabase();
@@ -199,7 +197,6 @@ async function main() {
         commandHandler = new CommandHandler();
         console.log('✅ تم تهيئة CommandHandler');
 
-        // استدعاء بوت تلغرام
         if (process.env.TELEGRAM_BOT_TOKEN) {
             await import('./telegramBot.js');
         }

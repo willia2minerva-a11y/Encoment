@@ -1,6 +1,6 @@
 // core/Player.js
 import mongoose from 'mongoose';
-import { items } from '../data/items.js';
+import { items } from '../../data/items.js';   // ✅ يبحث في src/data/
 
 global.itemsData = items;
 

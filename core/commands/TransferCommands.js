@@ -1,5 +1,5 @@
 // core/commands/TransferCommands.js
-import { BaseCommand } from '../BaseCommand.js';
+import { BaseCommand } from '../commands/BaseCommand.js';
 import Player from '../../models/Player.js';
 import Settings from '../../models/Settings.js';
 

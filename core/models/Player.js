@@ -18,11 +18,11 @@ const playerSchema = new mongoose.Schema({
     playerId: { type: String, unique: true, sparse: true },
     registrationStatus: { type: String, default: 'pending' },
     gold: { type: Number, default: 0, min: 0 },
-    
-    // ✅ المعاملات
+
+    // المعاملات
     transactions: [transactionSchema],
-    
-    // ✅ الإحالة
+
+    // الإحالة
     referralCode: { type: String, unique: true, sparse: true },
     referralCount: { type: Number, default: 0 },
     referredPlayers: [{
@@ -30,26 +30,27 @@ const playerSchema = new mongoose.Schema({
         name: String,
         date: { type: Date, default: Date.now }
     }],
-    
-    // ✅ الأكواد المستخدمة
+
+    // الأكواد المستخدمة
     usedGiftCodes: { type: [String], default: [] },
-    
-    // ✅ الخصم المطبق
+
+    // الخصم المطبق
     appliedDiscount: {
         code: { type: String, default: null },
         percentage: { type: Number, default: 0 },
         expiresAt: { type: Date, default: null }
     },
-    
-    // ✅ الحظر والسجن
+
+    // الحظر والسجن
     banned: { type: Boolean, default: false },
     jailedUntil: { type: Date, default: null },
     jailedReason: { type: String, default: null },
     jailNotified: { type: Boolean, default: false }
 }, {
     timestamps: true,
-    strict: false, // ✅ يقبل حقول إضافية من اللعبة
-    collection: 'players'
+    strict: false,
+    collection: 'players',
+    optimisticConcurrency: false // ✅ منع خطأ "No matching document"
 });
 
 // ✅ فحص السجن
@@ -73,25 +74,79 @@ playerSchema.methods.addTransaction = function(type, amount, description, target
     });
 };
 
+// ✅ حفظ آمن (يتجاهل خطأ الوثيقة المحذوفة)
+playerSchema.methods.safeSave = async function() {
+    try {
+        await this.save();
+        return true;
+    } catch (error) {
+        if (error.name === 'DocumentNotFoundError' || error.message?.includes('No matching document')) {
+            console.warn('⚠️ الوثيقة غير موجودة، يتم تجاهل الحفظ');
+            return false;
+        }
+        throw error;
+    }
+};
+
 // ✅ البحث بأي معرف
 playerSchema.statics.findByIdentifier = async function(identifier) {
     if (!identifier) return null;
     const clean = identifier.trim();
-    
+
     let player = await this.findOne({ userId: clean });
     if (player) return player;
-    
+
     player = await this.findOne({ playerId: clean });
     if (player) return player;
-    
+
     player = await this.findOne({ playerId: clean.toUpperCase() });
     if (player) return player;
-    
+
     player = await this.findOne({ name: new RegExp(`^${clean}$`, 'i') });
     if (player) return player;
-    
+
     player = await this.findOne({ name: new RegExp(clean, 'i') });
     return player;
+};
+
+// ✅ إضافة ريو بأمان (بدون save)
+playerSchema.statics.addGoldSafe = async function(userId, amount, transaction = null) {
+    const update = { $inc: { gold: amount } };
+    
+    if (transaction) {
+        update.$push = {
+            transactions: {
+                $each: [{
+                    id: `tx_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                    ...transaction,
+                    createdAt: new Date()
+                }],
+                $position: 0
+            }
+        };
+    }
+
+    return await this.updateOne({ userId }, update);
+};
+
+// ✅ خصم ريو بأمان
+playerSchema.statics.removeGoldSafe = async function(userId, amount, transaction = null) {
+    const update = { $inc: { gold: -amount } };
+    
+    if (transaction) {
+        update.$push = {
+            transactions: {
+                $each: [{
+                    id: `tx_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+                    ...transaction,
+                    createdAt: new Date()
+                }],
+                $position: 0
+            }
+        };
+    }
+
+    return await this.updateOne({ userId }, update);
 };
 
 const Player = mongoose.models.Player || mongoose.model('Player', playerSchema);

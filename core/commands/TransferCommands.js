@@ -1,8 +1,7 @@
 // core/commands/TransferCommands.js
 import { BaseCommand } from './BaseCommand.js';
-import Player from '../../models/Player.js';
-import Settings from '../../models/Settings.js';
-
+import Player from '../models/Player.js';
+import Settings from '../models/Settings.js';
 export class TransferCommands extends BaseCommand {
     getCommands() {
         return {

@@ -1,6 +1,6 @@
 // core/CommandHandler.js
 // الموقع: مشترك - يُنسخ في مغارة ريو + سوق ريو
-import Player from './Player.js';
+import Player from './models/Player.js';   // ✅
 import { ProfileCardGenerator } from '../utils/ProfileCardGenerator.js';
 import { AdminSystem } from '../systems/admin/AdminSystem.js';
 import { RegistrationCommands } from './commands/RegistrationCommands.js';

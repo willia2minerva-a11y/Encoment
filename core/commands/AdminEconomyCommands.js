@@ -1,5 +1,5 @@
 // core/commands/AdminEconomyCommands.js
-import { BaseCommand } from './BaseCommand.js';
+import { BaseCommand } from '../commands/BaseCommand.js';
 import Player from '../models/Player.js';
 import ShopItem from '../models/ShopItem.js';
 import GiftCode from '../models/GiftCode.js';

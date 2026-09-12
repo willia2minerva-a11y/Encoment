@@ -31,7 +31,6 @@ if (!TELEGRAM_BOT_TOKEN) {
 
             const response = await commandHandler.process(sender, text);
 
-            // ✅ لا رد (سجن أو فارغ)
             if (response === null || response === undefined) {
                 return;
             }
@@ -51,5 +50,5 @@ if (!TELEGRAM_BOT_TOKEN) {
         }
     });
 
-    console.log('✅ تم تشغيل بوت تلغرام (Economy)');
+    console.log('✅ تم تشغيل بوت تلغرام (سوق ريو - Souq Rio)');
 }

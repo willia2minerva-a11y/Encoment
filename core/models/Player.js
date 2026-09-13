@@ -50,7 +50,6 @@ const linkedPlatformSchema = new mongoose.Schema({
 // Player Schema
 // ===================================
 const playerSchema = new mongoose.Schema({
-    // ✅ الحساب
     username: { 
         type: String, 
         unique: true, 
@@ -65,12 +64,11 @@ const playerSchema = new mongoose.Schema({
         default: null 
     },
     
-    // ✅ ربط المنصات
     linkedPlatforms: [linkedPlatformSchema],
     loggedOutPlatforms: { type: [String], default: [] },
     
-    // معلومات اللاعب
     playerId: { type: String, unique: true, sparse: true },
+    originalPlayerId: { type: String, default: null },
     name: { type: String, default: null },
     registrationStatus: { 
         type: String, 
@@ -483,19 +481,37 @@ playerSchema.statics.findByPlatform = async function(platformId) {
     return await this.findOne({ 'linkedPlatforms.platformId': platformId });
 };
 
+// ✅ محدّث: يقبل 1100 و P1100 و 1050 (أدمن)
 playerSchema.statics.findByIdentifier = async function(identifier) {
     if (!identifier) return null;
     const clean = identifier.trim();
 
+    // 1. بالاسم (username)
     let player = await this.findOne({ username: clean.toLowerCase() });
     if (player) return player;
 
+    // 2. بـ playerId كما هو (للأدمن: "1050")
     player = await this.findOne({ playerId: clean });
     if (player) return player;
 
+    // 3. بـ playerId uppercase
     player = await this.findOne({ playerId: clean.toUpperCase() });
     if (player) return player;
 
+    // ✅ 4. إذا كان أرقاماً فقط، جرّب P+النص (للاعب: "1100" → "P1100")
+    if (/^\d+$/.test(clean)) {
+        player = await this.findOne({ playerId: `P${clean}` });
+        if (player) return player;
+    }
+
+    // ✅ 5. إذا بدأ بـ P، جرّب الأرقام فقط (للأدمن: "P1050" → "1050")
+    if (/^P\d+$/i.test(clean)) {
+        const numericPart = clean.substring(1);
+        player = await this.findOne({ playerId: numericPart });
+        if (player) return player;
+    }
+
+    // 6. بـ platformId
     player = await this.findOne({ 'linkedPlatforms.platformId': clean });
     if (player) return player;
 
@@ -554,7 +570,7 @@ playerSchema.statics.createAccount = async function(username, passwordHash, gend
 const Player = mongoose.model('Player', playerSchema);
 
 // ===================================
-// ✅ إصلاح: حذف الفهارس القديمة (userId_1) من نسخة سابقة
+// ✅ إصلاح: حذف الفهارس القديمة (userId_1)
 // ===================================
 (async () => {
     try {

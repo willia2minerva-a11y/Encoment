@@ -1,112 +1,94 @@
 // systems/card/BalanceCardGenerator.js
-import sharp from 'sharp';
+// الموقع: سوق ريو
 import fs from 'fs';
 import path from 'path';
 
 export class BalanceCardGenerator {
     constructor() {
-        this.WIDTH = 800;
-        this.HEIGHT = 450;
-        this.FONT_FAMILY = 'Impact, Tahoma, Arial';
         this.OUTPUT_DIR = path.resolve('assets/balance_cards');
-        this.BACKGROUNDS_DIR = path.resolve('assets/images');
-
         if (!fs.existsSync(this.OUTPUT_DIR)) {
             fs.mkdirSync(this.OUTPUT_DIR, { recursive: true });
         }
-    }
-
-    _generateSvgTextLayer(text, size, x, y, color = '#FFFFFF', fontWeight = 'bold', align = 'start') {
-        return Buffer.from(`
-            <svg width="${this.WIDTH}" height="${this.HEIGHT}">
-                <style>
-                    .text {
-                        font-family: ${this.FONT_FAMILY};
-                        font-size: ${size}px;
-                        fill: ${color};
-                        font-weight: ${fontWeight};
-                        text-anchor: ${align};
-                        dominant-baseline: hanging;
-                        text-shadow: 2px 2px 4px #000000;
-                    }
-                </style>
-                <text x="${x}" y="${y}" class="text">${text}</text>
-            </svg>
-        `);
+        console.log('💳 نظام بطاقة الرصيد تم تهيئته');
     }
 
     async generateCard(player) {
-        const width = this.WIDTH;
-        const height = this.HEIGHT;
-
         try {
-            const backgroundFileName = 'balance_card.png';
-            const backgroundPath = path.join(this.BACKGROUNDS_DIR, backgroundFileName);
-
-            let imageProcessor;
-            if (fs.existsSync(backgroundPath)) {
-                imageProcessor = sharp(backgroundPath).resize(width, height);
-            } else {
-                imageProcessor = sharp({
-                    create: {
-                        width,
-                        height,
-                        channels: 3,
-                        background: { r: 20, g: 30, b: 50, alpha: 1 }
-                    }
-                }).png();
-            }
-
-            const layers = [];
-
-            // ✅ الاسم (ذهبي)
-            const playerName = (player.name || 'مستخدم').toUpperCase();
-            layers.push({
-                input: this._generateSvgTextLayer(playerName, 50, width / 2, 100, '#FFD700', 'bold', 'middle'),
-                left: 0, top: 0
-            });
-
-            // ✅ ID (أبيض)
-            const playerIdText = player.playerId || player.userId;
-            layers.push({
-                input: this._generateSvgTextLayer(`ID: ${playerIdText}`, 30, width / 2, 180, '#FFFFFF', 'bold', 'middle'),
-                left: 0, top: 0
-            });
-
-            // ✅ كلمة الرصيد
-            layers.push({
-                input: this._generateSvgTextLayer('💰 الرصيد', 35, width / 2, 250, '#E0E0E0', 'bold', 'middle'),
-                left: 0, top: 0
-            });
-
-            // ✅ الرصيد (ذهبي)
-            const balance = player.gold || 0;
-            layers.push({
-                input: this._generateSvgTextLayer(`${balance} RIO`, 65, width / 2, 310, '#FFD700', 'bold', 'middle'),
-                left: 0, top: 0
-            });
-
-            // ✅ شعار سوق ريو
-            layers.push({
-                input: this._generateSvgTextLayer('SOUQ RIO - سوق ريو', 22, width / 2, 410, '#00BFFF', 'bold', 'middle'),
-                left: 0, top: 0
-            });
-
-            const outputBuffer = await imageProcessor
-                .composite(layers)
-                .png()
-                .toBuffer();
-
-            const filename = `balance_${player.userId}_${Date.now()}.png`;
+            // ✅ نولّد صورة SVG بسيطة
+            const svg = this._generateSVG(player);
+            const filename = `balance_${player.userId}_${Date.now()}.svg`;
             const outputPath = path.join(this.OUTPUT_DIR, filename);
-            await fs.promises.writeFile(outputPath, outputBuffer);
+
+            await fs.promises.writeFile(outputPath, svg);
 
             return outputPath;
-
         } catch (error) {
             console.error('❌ خطأ في توليد البطاقة:', error);
-            throw new Error('فشل في إنشاء بطاقة الرصيد: ' + error.message);
+            throw new Error('فشل إنشاء البطاقة: ' + error.message);
         }
+    }
+
+    _generateSVG(player) {
+        const username = (player.username || player.name || 'Player').toUpperCase();
+        const playerId = player.playerId || 'N/A';
+        const gold = player.gold || 0;
+
+        return `<?xml version="1.0" encoding="UTF-8"?>
+<svg width="800" height="450" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+        <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" style="stop-color:#1a1a2e;stop-opacity:1" />
+            <stop offset="100%" style="stop-color:#0f3460;stop-opacity:1" />
+        </linearGradient>
+        <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" style="stop-color:#FFD700;stop-opacity:1" />
+            <stop offset="100%" style="stop-color:#FFA500;stop-opacity:1" />
+        </linearGradient>
+    </defs>
+
+    <!-- الخلفية -->
+    <rect width="800" height="450" fill="url(#bgGrad)"/>
+    
+    <!-- الحدود -->
+    <rect x="10" y="10" width="780" height="430" 
+          fill="none" stroke="#FFD700" stroke-width="3" rx="20"/>
+    
+    <!-- شعار سوق ريو -->
+    <text x="400" y="60" font-family="Arial, sans-serif" font-size="28" 
+          fill="#00BFFF" text-anchor="middle" font-weight="bold">
+        🛒 SOUQ RIO - سوق ريو
+    </text>
+    
+    <!-- الاسم -->
+    <text x="400" y="150" font-family="Arial, sans-serif" font-size="50" 
+          fill="url(#goldGrad)" text-anchor="middle" font-weight="bold">
+        ${this._escape(username)}
+    </text>
+    
+    <!-- الـ ID -->
+    <text x="400" y="210" font-family="Arial, sans-serif" font-size="28" 
+          fill="#FFFFFF" text-anchor="middle">
+        ID: ${this._escape(playerId)}
+    </text>
+    
+    <!-- الرصيد -->
+    <text x="400" y="290" font-family="Arial, sans-serif" font-size="32" 
+          fill="#E0E0E0" text-anchor="middle">
+        💰 الرصيد
+    </text>
+    
+    <text x="400" y="360" font-family="Arial, sans-serif" font-size="65" 
+          fill="url(#goldGrad)" text-anchor="middle" font-weight="bold">
+        ${gold} RIO
+    </text>
+</svg>`;
+    }
+
+    _escape(str) {
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
     }
 
     async cleanupOldFiles() {
@@ -116,7 +98,7 @@ export class BalanceCardGenerator {
             const maxAge = 24 * 60 * 60 * 1000;
 
             for (const file of files) {
-                if (file.endsWith('.png')) {
+                if (file.endsWith('.svg') || file.endsWith('.png')) {
                     const filePath = path.join(this.OUTPUT_DIR, file);
                     const stats = fs.statSync(filePath);
                     if (now - stats.mtimeMs > maxAge) {
@@ -125,7 +107,7 @@ export class BalanceCardGenerator {
                 }
             }
         } catch (error) {
-            console.error('❌ خطأ في تنظيف البطاقات:', error);
+            console.error('❌ خطأ تنظيف:', error);
         }
     }
 }

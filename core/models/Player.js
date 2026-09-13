@@ -1,7 +1,7 @@
 // core/Player.js
 // الموقع: لعبة مغارة ريو (والسوق يستخدم نسخة مشابهة)
 import mongoose from 'mongoose';
-import { DataLoader } from '../systems/data/DataLoader.js';   // ✅ جديد
+import { DataLoader } from '../../systems/data/DataLoader.js';
 
 // ✅ بدلاً من global.itemsData
 Object.defineProperty(global, 'itemsData', {

@@ -5,7 +5,6 @@ import { BaseCommand } from './BaseCommand.js';
 export class EconomyCommands extends BaseCommand {
     getCommands() {
         return {
-            // ====== الرصيد ======
             'رصيد': this.handleBalance.bind(this),
             'رصيدي': this.handleBalance.bind(this),
             'بطاقة': this.handleCard.bind(this),
@@ -13,7 +12,6 @@ export class EconomyCommands extends BaseCommand {
             'معاملاتي': this.handleTransactions.bind(this),
             'سجلي': this.handleTransactions.bind(this),
 
-            // ====== المتجر ======
             'متجر': this.handleShop.bind(this),
             'المتجر': this.handleShop.bind(this),
             'منتجات': this.handleShop.bind(this),
@@ -22,17 +20,14 @@ export class EconomyCommands extends BaseCommand {
             'اشتري': this.handlePurchase.bind(this),
             'اشتر': this.handlePurchase.bind(this),
 
-            // ====== التحويل ======
             'تحويل': this.handleTransfer.bind(this),
             'حول': this.handleTransfer.bind(this),
 
-            // ====== الأكواد ======
             'هدية': this.handleGiftCode.bind(this),
             'كود': this.handleGiftCode.bind(this),
             'خصم': this.handleDiscountCode.bind(this),
             'كوبون': this.handleDiscountCode.bind(this),
 
-            // ====== أوامر الأدمن الاقتصادية ======
             'اضف_رصيد': this.handleAddBalance.bind(this),
             'اسحب_رصيد': this.handleRemoveBalance.bind(this),
             'تعديل_رصيد': this.handleSetBalance.bind(this),
@@ -60,9 +55,21 @@ export class EconomyCommands extends BaseCommand {
         };
     }
 
-    // ===================================
-    // الرصيد
-    // ===================================
+    async isAdmin(senderId, player) {
+        if (!senderId) return false;
+
+        // 1. الأدمن الرئيسي أو المعيَّن (عبر AdminSystem)
+        if (await this.commandHandler.adminSystem.isAdminAsync(senderId)) return true;
+
+        // 2. فحص إضافي
+        if (player && player.isRoot) return true;
+        if (player && typeof player.getActivePermissions === 'function') {
+            return player.getActivePermissions().length > 0;
+        }
+
+        return false;
+    }
+
     async handleBalance(player) {
         const check = await this.checkPlayerStatus(player);
         if (check.error) return check.error;
@@ -124,9 +131,6 @@ ${gameUrl}
         return msg;
     }
 
-    // ===================================
-    // المتجر
-    // ===================================
     async handleShop(player, args) {
         const check = await this.checkPlayerStatus(player);
         if (check.error) return check.error;
@@ -176,7 +180,6 @@ ${gameUrl}
         let quantity = 1;
         let productQuery = args.join(' ');
 
-        // ✅ فحص إذا كان آخر جزء رقم = كمية
         const lastArg = args[args.length - 1];
         if (!isNaN(lastArg) && args.length > 1) {
             quantity = parseInt(lastArg);
@@ -190,16 +193,13 @@ ${gameUrl}
         const shopSystem = await this.getSystem('shop');
         if (!shopSystem) return '❌ نظام المتجر غير متوفر.';
 
-        // ✅ إذا كانت الكمية غير محددة، اسأل اللاعب
         if (args.length === 1 && quantity === 1) {
-            // فحص وجود منتج
             const product = await shopSystem._findProduct(productQuery);
             
             if (!product) {
                 return `❌ لم يتم العثور على المنتج: "${productQuery}"\n\n💡 للعرض: متجر`;
             }
 
-            // إذا كان المنتج من نوع "game_item" أو "external" وليس حدث/اشتراك
             if (product.type === 'game_item' || product.type === 'external') {
                 return `🛒 ${product.name}
 
@@ -219,9 +219,6 @@ ${gameUrl}
         return result.error || result.message;
     }
 
-    // ===================================
-    // التحويل
-    // ===================================
     async handleTransfer(player, args) {
         const check = await this.checkPlayerStatus(player);
         if (check.error) return check.error;
@@ -258,7 +255,11 @@ ${gameUrl}
 
         const target = await Player.findByIdentifier(targetName);
         if (!target) return `❌ لم يتم العثور على اللاعب: ${targetName}`;
-        if (target.userId === player.userId) return '❌ لا يمكنك التحويل لنفسك!';
+
+        if (target._id.equals(player._id)) {
+            return '❌ لا يمكنك التحويل لنفسك!';
+        }
+
         if (target.banned) return '❌ اللاعب محظور.';
 
         player.gold -= totalDeduction;
@@ -282,9 +283,6 @@ ${gameUrl}
 💰 رصيدك الجديد: ${player.gold} ريو`;
     }
 
-    // ===================================
-    // الأكواد
-    // ===================================
     async handleGiftCode(player, args) {
         const check = await this.checkPlayerStatus(player);
         if (check.error) return check.error;
@@ -315,15 +313,8 @@ ${gameUrl}
         return result.error || result.message;
     }
 
-    // ===================================
-    // أوامر الأدمن
-    // ===================================
-    async isAdmin(player) {
-        return await this.commandHandler.adminSystem.isAdminAsync(player.userId);
-    }
-
-    async handleAddBalance(player, args) {
-        if (!await this.isAdmin(player)) return '❌ هذا الأمر للمدراء فقط.';
+    async handleAddBalance(player, args, senderId) {
+        if (!await this.isAdmin(senderId, player)) return '❌ هذا الأمر للمدراء فقط.';
         if (args.length < 2) return '❌ الاستخدام: اضف_رصيد [ID] [المبلغ]';
 
         const Player = (await import('../models/Player.js')).default;
@@ -339,8 +330,8 @@ ${gameUrl}
         return `✅ تمت إضافة ${amount} ريو إلى ${target.username}`;
     }
 
-    async handleRemoveBalance(player, args) {
-        if (!await this.isAdmin(player)) return '❌ هذا الأمر للمدراء فقط.';
+    async handleRemoveBalance(player, args, senderId) {
+        if (!await this.isAdmin(senderId, player)) return '❌ هذا الأمر للمدراء فقط.';
         if (args.length < 2) return '❌ الاستخدام: اسحب_رصيد [ID] [المبلغ]';
 
         const Player = (await import('../models/Player.js')).default;
@@ -357,8 +348,8 @@ ${gameUrl}
         return `✅ تم خصم ${amount} ريو من ${target.username}`;
     }
 
-    async handleSetBalance(player, args) {
-        if (!await this.isAdmin(player)) return '❌ هذا الأمر للمدراء فقط.';
+    async handleSetBalance(player, args, senderId) {
+        if (!await this.isAdmin(senderId, player)) return '❌ هذا الأمر للمدراء فقط.';
         if (args.length < 2) return '❌ الاستخدام: تعديل_رصيد [ID] [المبلغ]';
 
         const Player = (await import('../models/Player.js')).default;
@@ -375,8 +366,8 @@ ${gameUrl}
         return `✅ تم تعديل الرصيد من ${old} إلى ${amount}`;
     }
 
-    async handleAddProduct(player, args) {
-        if (!await this.isAdmin(player)) return '❌ هذا الأمر للمدراء فقط.';
+    async handleAddProduct(player, args, senderId) {
+        if (!await this.isAdmin(senderId, player)) return '❌ هذا الأمر للمدراء فقط.';
         if (args.length < 4) {
             return `❌ الاستخدام: اضف_منتج [ID] [الاسم] [السعر] [النوع]
 
@@ -427,11 +418,11 @@ ${gameUrl}
             productData.subInterval = args[5] || 'monthly';
         }
 
-        return await shopSystem.addProduct(productData, player.userId);
+        return await shopSystem.addProduct(productData, player.userId || senderId);
     }
 
-    async handleRemoveProduct(player, args) {
-        if (!await this.isAdmin(player)) return '❌ هذا الأمر للمدراء فقط.';
+    async handleRemoveProduct(player, args, senderId) {
+        if (!await this.isAdmin(senderId, player)) return '❌ هذا الأمر للمدراء فقط.';
         if (args.length === 0) return '❌ الاستخدام: حذف_منتج [ID أو الاسم]';
 
         const shopSystem = await this.getSystem('shop');
@@ -440,8 +431,8 @@ ${gameUrl}
         return await shopSystem.removeProduct(args.join(' '));
     }
 
-    async handleEditProduct(player, args) {
-        if (!await this.isAdmin(player)) return '❌ هذا الأمر للمدراء فقط.';
+    async handleEditProduct(player, args, senderId) {
+        if (!await this.isAdmin(senderId, player)) return '❌ هذا الأمر للمدراء فقط.';
         if (args.length < 3) return '❌ الاستخدام: تعديل_منتج [ID] [الحقل] [القيمة]';
 
         const shopSystem = await this.getSystem('shop');
@@ -450,8 +441,8 @@ ${gameUrl}
         return await shopSystem.editProduct(args[0], args[1], args.slice(2).join(' '));
     }
 
-    async handleListProducts(player) {
-        if (!await this.isAdmin(player)) return '❌ هذا الأمر للمدراء فقط.';
+    async handleListProducts(player, args, senderId) {
+        if (!await this.isAdmin(senderId, player)) return '❌ هذا الأمر للمدراء فقط.';
 
         const shopSystem = await this.getSystem('shop');
         if (!shopSystem) return '❌ نظام المتجر غير متوفر.';
@@ -459,8 +450,8 @@ ${gameUrl}
         return await shopSystem.listAllProducts();
     }
 
-    async handleAddStock(player, args) {
-        if (!await this.isAdmin(player)) return '❌ هذا الأمر للمدراء فقط.';
+    async handleAddStock(player, args, senderId) {
+        if (!await this.isAdmin(senderId, player)) return '❌ هذا الأمر للمدراء فقط.';
         if (args.length < 2) return '❌ الاستخدام: اضف_مخزون [ID أو الاسم] [الكمية]';
 
         const shopSystem = await this.getSystem('shop');
@@ -472,8 +463,8 @@ ${gameUrl}
         return await shopSystem.addStock(productQuery, quantity);
     }
 
-    async handleAddGiftCode(player, args) {
-        if (!await this.isAdmin(player)) return '❌ هذا الأمر للمدراء فقط.';
+    async handleAddGiftCode(player, args, senderId) {
+        if (!await this.isAdmin(senderId, player)) return '❌ هذا الأمر للمدراء فقط.';
         if (args.length < 3) return `❌ الاستخدام: اضف_كود [الكود] [المبلغ] [الاستخدامات] [المدة بالساعات]`;
 
         const sys = await this.getSystem('giftcode');
@@ -490,8 +481,8 @@ ${gameUrl}
         return result.error || result.message;
     }
 
-    async handleRemoveGiftCode(player, args) {
-        if (!await this.isAdmin(player)) return '❌ هذا الأمر للمدراء فقط.';
+    async handleRemoveGiftCode(player, args, senderId) {
+        if (!await this.isAdmin(senderId, player)) return '❌ هذا الأمر للمدراء فقط.';
         if (args.length === 0) return '❌ الاستخدام: حذف_كود [الكود]';
 
         const sys = await this.getSystem('giftcode');
@@ -500,8 +491,8 @@ ${gameUrl}
         return await sys.removeCode(args[0]);
     }
 
-    async handleListGiftCodes(player) {
-        if (!await this.isAdmin(player)) return '❌ هذا الأمر للمدراء فقط.';
+    async handleListGiftCodes(player, args, senderId) {
+        if (!await this.isAdmin(senderId, player)) return '❌ هذا الأمر للمدراء فقط.';
 
         const sys = await this.getSystem('giftcode');
         if (!sys) return '❌ نظام الأكواد غير متوفر.';
@@ -509,8 +500,8 @@ ${gameUrl}
         return await sys.listAllCodes();
     }
 
-    async handleAddDiscountCode(player, args) {
-        if (!await this.isAdmin(player)) return '❌ هذا الأمر للمدراء فقط.';
+    async handleAddDiscountCode(player, args, senderId) {
+        if (!await this.isAdmin(senderId, player)) return '❌ هذا الأمر للمدراء فقط.';
         if (args.length < 3) return '❌ الاستخدام: اضف_خصم [الكود] [النسبة] [الاستخدامات] [المدة]';
 
         const sys = await this.getSystem('discountcode');
@@ -527,8 +518,8 @@ ${gameUrl}
         return result.error || result.message;
     }
 
-    async handleRemoveDiscountCode(player, args) {
-        if (!await this.isAdmin(player)) return '❌ هذا الأمر للمدراء فقط.';
+    async handleRemoveDiscountCode(player, args, senderId) {
+        if (!await this.isAdmin(senderId, player)) return '❌ هذا الأمر للمدراء فقط.';
         if (args.length === 0) return '❌ الاستخدام: حذف_خصم [الكود]';
 
         const sys = await this.getSystem('discountcode');
@@ -537,8 +528,8 @@ ${gameUrl}
         return await sys.removeCode(args[0]);
     }
 
-    async handleListDiscountCodes(player) {
-        if (!await this.isAdmin(player)) return '❌ هذا الأمر للمدراء فقط.';
+    async handleListDiscountCodes(player, args, senderId) {
+        if (!await this.isAdmin(senderId, player)) return '❌ هذا الأمر للمدراء فقط.';
 
         const sys = await this.getSystem('discountcode');
         if (!sys) return '❌ نظام الأكواد غير متوفر.';
@@ -546,8 +537,8 @@ ${gameUrl}
         return await sys.listAllCodes();
     }
 
-    async handleEconomyStats(player) {
-        if (!await this.isAdmin(player)) return '❌ هذا الأمر للمدراء فقط.';
+    async handleEconomyStats(player, args, senderId) {
+        if (!await this.isAdmin(senderId, player)) return '❌ هذا الأمر للمدراء فقط.';
 
         const sys = await this.getSystem('economy');
         if (!sys) return '❌ نظام الاقتصاد غير متوفر.';
@@ -555,8 +546,8 @@ ${gameUrl}
         return await sys.showEconomyStats();
     }
 
-    async handleRichest(player, args) {
-        if (!await this.isAdmin(player)) return '❌ هذا الأمر للمدراء فقط.';
+    async handleRichest(player, args, senderId) {
+        if (!await this.isAdmin(senderId, player)) return '❌ هذا الأمر للمدراء فقط.';
 
         const sys = await this.getSystem('economy');
         if (!sys) return '❌ نظام الاقتصاد غير متوفر.';
@@ -564,8 +555,8 @@ ${gameUrl}
         return await sys.showRichestPlayers(parseInt(args[0]) || 1);
     }
 
-    async handlePoorest(player, args) {
-        if (!await this.isAdmin(player)) return '❌ هذا الأمر للمدراء فقط.';
+    async handlePoorest(player, args, senderId) {
+        if (!await this.isAdmin(senderId, player)) return '❌ هذا الأمر للمدراء فقط.';
 
         const sys = await this.getSystem('economy');
         if (!sys) return '❌ نظام الاقتصاد غير متوفر.';
@@ -573,8 +564,8 @@ ${gameUrl}
         return await sys.showPoorestPlayers(parseInt(args[0]) || 1);
     }
 
-    async handlePlayerEconomy(player, args) {
-        if (!await this.isAdmin(player)) return '❌ هذا الأمر للمدراء فقط.';
+    async handlePlayerEconomy(player, args, senderId) {
+        if (!await this.isAdmin(senderId, player)) return '❌ هذا الأمر للمدراء فقط.';
         if (args.length === 0) return '❌ الاستخدام: اقتصاد_لاعب [الاسم]';
 
         const sys = await this.getSystem('economy');
@@ -583,8 +574,8 @@ ${gameUrl}
         return await sys.showPlayerEconomy(args.join(' '));
     }
 
-    async handlePlayerTransactions(player, args) {
-        if (!await this.isAdmin(player)) return '❌ هذا الأمر للمدراء فقط.';
+    async handlePlayerTransactions(player, args, senderId) {
+        if (!await this.isAdmin(senderId, player)) return '❌ هذا الأمر للمدراء فقط.';
         if (args.length === 0) return '❌ الاستخدام: معاملات_لاعب [الاسم] [صفحة]';
 
         const sys = await this.getSystem('economy');
@@ -596,11 +587,8 @@ ${gameUrl}
         return await sys.showPlayerTransactions(name, page);
     }
 
-    // ===================================
-    // الصندوق
-    // ===================================
-    async handleBox(player) {
-        if (!await this.isAdmin(player)) return '❌ هذا الأمر للمدراء فقط.';
+    async handleBox(player, args, senderId) {
+        if (!await this.isAdmin(senderId, player)) return '❌ هذا الأمر للمدراء فقط.';
 
         const Settings = (await import('../models/Settings.js')).default;
         const box = await Settings.get('economyBox', 0);
@@ -609,8 +597,8 @@ ${gameUrl}
         return `🏦 صندوق الاقتصاد\n\n💰 الرصيد: ${box} ريو\n📊 نسبة الرسوم: ${fee}%`;
     }
 
-    async handleWithdrawBox(player, args) {
-        if (!await this.isAdmin(player)) return '❌ هذا الأمر للمدراء فقط.';
+    async handleWithdrawBox(player, args, senderId) {
+        if (!await this.isAdmin(senderId, player)) return '❌ هذا الأمر للمدراء فقط.';
         if (args.length === 0) return '❌ الاستخدام: اسحب_صندوق [المبلغ]';
 
         const amount = parseInt(args[0]);
@@ -628,8 +616,8 @@ ${gameUrl}
         return `✅ تم السحب\n💰 المبلغ: ${amount}\n💎 رصيدك: ${player.gold}\n🏦 الصندوق: ${box - amount}`;
     }
 
-    async handleDepositBox(player, args) {
-        if (!await this.isAdmin(player)) return '❌ هذا الأمر للمدراء فقط.';
+    async handleDepositBox(player, args, senderId) {
+        if (!await this.isAdmin(senderId, player)) return '❌ هذا الأمر للمدراء فقط.';
         if (args.length === 0) return '❌ الاستخدام: ايداع_صندوق [المبلغ]';
 
         const amount = parseInt(args[0]);
@@ -647,11 +635,8 @@ ${gameUrl}
         return `✅ تم الإيداع\n💰 المبلغ: ${amount}\n💎 رصيدك: ${player.gold}\n🏦 الصندوق: ${box + amount}`;
     }
 
-    // ===================================
-    // الإعدادات
-    // ===================================
-    async handleSettings(player) {
-        if (!await this.isAdmin(player)) return '❌ هذا الأمر للمدراء فقط.';
+    async handleSettings(player, args, senderId) {
+        if (!await this.isAdmin(senderId, player)) return '❌ هذا الأمر للمدراء فقط.';
 
         const sys = await this.getSystem('settings');
         if (!sys) return '❌ نظام الإعدادات غير متوفر.';
@@ -659,8 +644,8 @@ ${gameUrl}
         return await sys.showAll();
     }
 
-    async handleEditSetting(player, args) {
-        if (!await this.isAdmin(player)) return '❌ هذا الأمر للمدراء فقط.';
+    async handleEditSetting(player, args, senderId) {
+        if (!await this.isAdmin(senderId, player)) return '❌ هذا الأمر للمدراء فقط.';
         if (args.length < 2) return '❌ الاستخدام: تعديل_اعداد [المفتاح] [القيمة]';
 
         const key = args[0];
@@ -676,4 +661,4 @@ ${gameUrl}
 
         return `✅ تم تعديل الإعداد\n⚙️ ${key} = ${value}`;
     }
-    }
+                }

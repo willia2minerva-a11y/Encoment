@@ -1,5 +1,5 @@
-// core/Player.js
-// الموقع: مغارة ريو
+// core/models/Player.js
+// الموقع: سوق ريو
 import mongoose from 'mongoose';
 import { DataLoader } from '../../systems/data/DataLoader.js';
 
@@ -8,9 +8,6 @@ Object.defineProperty(global, 'itemsData', {
     configurable: true
 });
 
-// ===================================
-// Schemas فرعية
-// ===================================
 const inventoryItemSchema = new mongoose.Schema({
     id: { type: String, required: true },
     name: { type: String, required: true },
@@ -45,9 +42,6 @@ const linkedPlatformSchema = new mongoose.Schema({
     lastActive: { type: Date, default: Date.now }
 }, { _id: false });
 
-// ===================================
-// Player Schema
-// ===================================
 const playerSchema = new mongoose.Schema({
     username: { 
         type: String, 
@@ -70,7 +64,6 @@ const playerSchema = new mongoose.Schema({
     originalPlayerId: { type: String, default: null },
     name: { type: String, default: null },
     
-    // ✅ جديد: تحديد الأدمن الرئيسي
     isRoot: { type: Boolean, default: false, index: true },
     
     registrationStatus: { 
@@ -240,7 +233,7 @@ playerSchema.methods.getActivePermissions = function() {
 };
 
 playerSchema.methods.hasPermission = function(permissionType) {
-    if (this.isRoot) return true;  // ✅ Root = كل الصلاحيات
+    if (this.isRoot) return true;
     const perms = this.getActivePermissions();
     if (perms.some(p => p.type === 'full_admin')) return true;
     return perms.some(p => p.type === permissionType);
@@ -444,9 +437,6 @@ playerSchema.methods.unequipItem = function(slot, itemsData) {
     return { success: true };
 };
 
-// ===================================
-// Pre-save
-// ===================================
 playerSchema.pre('save', function(next) {
     this.updatedAt = Date.now();
     this.recalculateMaxStats(this.getEquippedItemStats(DataLoader.getItems()));
@@ -457,7 +447,6 @@ playerSchema.pre('save', function(next) {
 // Statics
 // ===================================
 
-// ✅ يبدأ من 1099 (بعد الأدمن الرئيسي 1000 والأدمن المعيَّن 1001-1099)
 playerSchema.statics.getLastPlayerNumericId = async function() {
     const last = await this.findOne({ playerId: { $regex: /^P\d+$/ } }).sort({ playerId: -1 }).exec();
     if (last?.playerId) {
@@ -467,7 +456,6 @@ playerSchema.statics.getLastPlayerNumericId = async function() {
     return 1099;
 };
 
-// ✅ يبدأ من 1000 (الأدمن الرئيسي) — يتجاهله
 playerSchema.statics.getLastAdminNumericId = async function() {
     const last = await this.findOne({
         playerId: { $regex: /^\d+$/ },
@@ -477,7 +465,7 @@ playerSchema.statics.getLastAdminNumericId = async function() {
         const id = parseInt(last.playerId, 10);
         if (!isNaN(id) && id >= 1001) return id;
     }
-    return 1000; // الأدمن الرئيسي 1000 → next = 1001
+    return 1000;
 };
 
 playerSchema.statics.findByUsername = async function(username) {
@@ -490,44 +478,36 @@ playerSchema.statics.findByPlatform = async function(platformId) {
     return await this.findOne({ 'linkedPlatforms.platformId': platformId });
 };
 
-// ✅ يقبل: اسم، P1100، 1100، 1000، 1050
 playerSchema.statics.findByIdentifier = async function(identifier) {
     if (!identifier) return null;
     const clean = identifier.trim();
 
-    // 1. بالاسم
     let player = await this.findOne({ username: clean.toLowerCase() });
     if (player) return player;
 
-    // 2. بـ playerId مباشر (للأدمن: "1000" و "1050")
     player = await this.findOne({ playerId: clean });
     if (player) return player;
 
-    // 3. uppercase
     player = await this.findOne({ playerId: clean.toUpperCase() });
     if (player) return player;
 
-    // 4. أرقام → جرّب P+النص ("1100" → "P1100")
     if (/^\d+$/.test(clean)) {
         player = await this.findOne({ playerId: `P${clean}` });
         if (player) return player;
     }
 
-    // 5. P+أرقام → جرّب الأرقام فقط ("P1000" → "1000")
     if (/^P\d+$/i.test(clean)) {
         const numericPart = clean.substring(1);
         player = await this.findOne({ playerId: numericPart });
         if (player) return player;
     }
 
-    // 6. platformId
     player = await this.findOne({ 'linkedPlatforms.platformId': clean });
     if (player) return player;
 
     return null;
 };
 
-// ✅ جديد: إنشاء/تحديث الأدمن الرئيسي
 playerSchema.statics.ensureRootAdmin = async function() {
     const username = (process.env.ADMIN_USERNAME || 'admin').toLowerCase().trim();
     const password = process.env.ADMIN_PASSWORD;
@@ -543,7 +523,6 @@ playerSchema.statics.ensureRootAdmin = async function() {
     let rootAdmin = await this.findOne({ isRoot: true });
 
     if (!rootAdmin) {
-        // ✅ إنشاء جديد
         rootAdmin = new this({
             username,
             passwordHash,
@@ -571,9 +550,8 @@ playerSchema.statics.ensureRootAdmin = async function() {
             linkedPlatforms: []
         });
         await rootAdmin.save();
-        console.log(`✅ تم إنشاء الأدمن الرئيسي (ID: 1000) - username: ${username}`);
+        console.log(`✅ [سوق ريو] تم إنشاء الأدمن الرئيسي (ID: 1000) - username: ${username}`);
     } else {
-        // ✅ تحديث الموجود
         let changed = false;
         if (rootAdmin.username !== username) {
             rootAdmin.username = username;
@@ -594,9 +572,9 @@ playerSchema.statics.ensureRootAdmin = async function() {
         }
         if (changed) {
             await rootAdmin.save();
-            console.log(`✅ تم تحديث الأدمن الرئيسي (ID: 1000) - username: ${username}`);
+            console.log(`✅ [سوق ريو] تم تحديث الأدمن الرئيسي (ID: 1000)`);
         } else {
-            console.log(`ℹ️ الأدمن الرئيسي موجود بالفعل (ID: 1000)`);
+            console.log(`ℹ️ [سوق ريو] الأدمن الرئيسي موجود بالفعل (ID: 1000)`);
         }
     }
 
@@ -650,14 +628,9 @@ playerSchema.statics.createAccount = async function(username, passwordHash, gend
     return player;
 };
 
-// ===================================
-// إنشاء الموديل
-// ===================================
 const Player = mongoose.model('Player', playerSchema);
 
-// ===================================
 // ✅ حذف الفهارس القديمة
-// ===================================
 (async () => {
     try {
         const waitForConnection = () => new Promise((resolve) => {
@@ -689,8 +662,6 @@ const Player = mongoose.model('Player', playerSchema);
                 }
             }
         }
-
-        console.log('✅ [سوق ريو] فحص الفهارس القديمة اكتمل');
     } catch (error) {
         console.error('⚠️ [سوق ريو] خطأ في فحص الفهارس:', error.message);
     }

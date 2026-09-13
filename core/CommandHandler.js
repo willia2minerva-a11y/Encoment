@@ -19,17 +19,13 @@ export default class CommandHandler {
             this.gamePageUrl = process.env.GAME_PAGE_URL || 'https://facebook.com/MgaraRio';
             this.marketPageUrl = process.env.MARKET_PAGE_URL || 'https://facebook.com/SouqRio';
 
-            // ✅ لا نحتاج ArabicItemMap في السوق
             this.ARABIC_ITEM_MAP = {};
-
-            // ✅ وضع السوق دائماً
             this.isMarketMode = true;
             console.log('🎯 الوضع: سوق ريو');
 
             this.initCommandClasses();
             this.commands = this.collectAllCommands();
 
-            // ✅ أوامر التسجيل المسموحة دائماً
             this.alwaysAllowed = [
                 'بدء', 'ابدأ', 'ابدء', 'ابد', 'start',
                 'دخول', 'تسجيل دخول', 'تسجيل_دخول', 'تسجيلالدخول', 'لدي حساب', 'لدي_حساب', 'لديحساب',
@@ -41,7 +37,6 @@ export default class CommandHandler {
                 'مساعدة', 'اوامر', 'رصيد', 'رصيدي'
             ];
 
-            // ✅ تحميل AccountSystem مسبقاً
             this.loadAccountSystem();
 
             console.log('✅ CommandHandler (سوق ريو) تم تهيئته');
@@ -52,7 +47,6 @@ export default class CommandHandler {
         }
     }
 
-    // ✅ تحميل AccountSystem
     async loadAccountSystem() {
         console.log('🔍 التحقق من AccountSystem...');
         const accountSystem = await SystemLoader.loadSystem('account');
@@ -218,7 +212,7 @@ export default class CommandHandler {
             const isBanned = await BannedPlayer.isBanned(id);
             if (isBanned) return null;
         } catch (e) {
-            // تجاهل إذا لم تكن المجموعة موجودة
+            // تجاهل
         }
 
         // ✅ فحص جلسات التسجيل/الدخول
@@ -276,6 +270,19 @@ export default class CommandHandler {
 
         // ✅ فحص المدير
         const userIsAdmin = await this.adminSystem.isAdminAsync(id);
+
+        // ✅ أوامر المساعدة (قبل الأوامر الإدارية)
+        if (command === 'مساعدة' || command === 'اوامر' || command === 'الاوامر' || command === 'الأوامر') {
+            if (userIsAdmin) return this.getAdminHelp();
+            return this.getHelpMessage();
+        }
+
+        if (command === 'بدء' || command === 'start') {
+            if (userIsAdmin) return this.getAdminHelp();
+            return this.getWelcomeMessage();
+        }
+
+        // ✅ فحص المدير
         if (userIsAdmin) {
             const adminResult = await this.handleAdminCommand(command, args, id, player);
             if (adminResult) return adminResult;
@@ -314,6 +321,11 @@ export default class CommandHandler {
             '1', '2',
             'معرفي', 'معرف', 'مساعدة', 'اوامر'
         ];
+
+        // ✅ المساعدة تعمل حتى بدون حساب
+        if (command === 'مساعدة' || command === 'اوامر') {
+            return this.getWelcomeMessage();
+        }
 
         if (!accountCommands.includes(command)) {
             return accountSystem.getWelcomeMessage(sender.platform || 'facebook');
@@ -363,11 +375,16 @@ export default class CommandHandler {
         const allowed = [
             'بدء', 'ابدأ', 'دخول', 'تسجيل_دخول', 'تسجيلالدخول',
             'لدي_حساب', 'انشاء', 'إنشاء', 'تسجيل', 'حساب_جديد',
-            'الغاء', 'إلغاء', 'cancel', '1', '2', 'مساعدة'
+            'الغاء', 'إلغاء', 'cancel', '1', '2', 'مساعدة', 'اوامر'
         ];
 
         if (!allowed.includes(command)) {
             return `🔒 أنت مسجل خروج.\n\n💡 اكتب "دخول" لتسجيل الدخول.`;
+        }
+
+        // ✅ المساعدة تعمل حتى لو كان مسجل خروج
+        if (command === 'مساعدة' || command === 'اوامر') {
+            return this.getHelpMessage();
         }
 
         const regCommands = this.registrationCommands.getCommands();
@@ -417,6 +434,102 @@ export default class CommandHandler {
         }
     }
 
+    // ===================================
+    // ✅ رسائل المساعدة
+    // ===================================
+
+    getWelcomeMessage() {
+        const gameUrl = this.gamePageUrl || 'https://facebook.com/MgaraRio';
+
+        return `🛒 مرحباً بك في سوق ريو - Souq Rio
+
+📖 السوق الرسمي لعالم ريو
+
+💡 ماذا تجد هنا:
+• عرض رصيدك من الريو
+• شراء منتجات اللعبة والخدمات
+• تحويل الريو لأصدقائك
+• استخدام أكواد الخصم والهدايا
+• بطاقة رصيد مصورة
+
+🎮 للعب والتسجيل:
+${gameUrl}
+
+📋 أوامرك:
+• رصيد - عرض رصيدك
+• متجر - عرض المنتجات
+• تحويل - تحويل لأي لاعب
+• مساعدة - الأوامر كاملة`;
+    }
+
+    getHelpMessage() {
+        const gameUrl = this.gamePageUrl || 'https://facebook.com/MgaraRio';
+
+        return `🛒 سوق ريو - Souq Rio
+
+📊 الرصيد:
+• رصيد - عرض رصيدك
+• بطاقة - بطاقة رصيد مصورة
+• معاملاتي - سجل معاملاتك
+
+🛒 المتجر:
+• متجر [صفحة] - عرض المنتجات
+• شراء [ID] - شراء منتج
+• منتج [ID] - تفاصيل منتج
+
+💸 التحويل:
+• تحويل [الاسم] [المبلغ]
+
+🎁 الأكواد:
+• هدية [الكود] - استخدام كود هدية
+• خصم [الكود] - تفعيل كود خصم
+
+🎮 للعب: ${gameUrl}`;
+    }
+
+    getAdminHelp() {
+        return `👑 أوامر الأدمن - سوق ريو
+
+💰 الرصيد:
+• اضف_رصيد [ID] [المبلغ]
+• اسحب_رصيد [ID] [المبلغ]
+• تعديل_رصيد [ID] [المبلغ]
+
+🛒 المنتجات:
+• اضف_منتج [ID] [الاسم] [السعر] [النوع]
+• حذف_منتج [ID]
+• تعديل_منتج [ID] [الحقل] [القيمة]
+• قائمة_المنتجات
+• اضف_مخزون [ID] [الكمية]
+
+🎁 الأكواد:
+• اضف_كود [الكود] [المبلغ] [الاستخدامات] [المدة]
+• حذف_كود [الكود]
+• قائمة_الاكواد
+• اضف_خصم [الكود] [النسبة] [الاستخدامات] [المدة]
+• حذف_خصم [الكود]
+• قائمة_الخصومات
+
+📊 الإحصائيات:
+• اقتصاد
+• اغنياء [صفحة]
+• فقراء [صفحة]
+• اقتصاد_لاعب [الاسم]
+• معاملات_لاعب [الاسم]
+
+🏦 الصندوق:
+• صندوق
+• اسحب_صندوق [المبلغ]
+• ايداع_صندوق [المبلغ]
+
+⚙️ الإعدادات:
+• اعدادات
+• تعديل_اعداد [المفتاح] [القيمة]
+
+💡 الأوامر تقبل أي شكل:
+اضف_رصيد | اضف رصيد | اضفرصيد`;
+    }
+
     // ✅ أمر غير معروف
     async handleUnknown(command, player, isAdmin = false) {
         let msg = `❓ أمر غير معروف: "${command}"\n\n`;
@@ -428,4 +541,4 @@ export default class CommandHandler {
         msg += `💡 اكتب "مساعدة" للأوامر.`;
         return msg;
     }
-    }
+            }

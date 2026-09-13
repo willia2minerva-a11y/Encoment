@@ -1,20 +1,14 @@
 // systems/account/AccountSystem.js
-// الموقع: مشترك - يُنسخ في مغارة ريو + سوق ريو
+// الموقع: سوق ريو
 import bcrypt from 'bcryptjs';
 import Player from '../../core/models/Player.js';
 
 export class AccountSystem {
     constructor() {
-        // ✅ جلسات التسجيل المؤقتة (قبل إنشاء الحساب)
-        this.registrationSessions = new Map(); // platformId => { step, data, startedAt }
+        this.registrationSessions = new Map();
+        this.loginSessions = new Map();
+        this.loginAttempts = new Map();
 
-        // ✅ جلسات تسجيل الدخول
-        this.loginSessions = new Map(); // platformId => { step, username, startedAt }
-
-        // ✅ محاولات الدخول الفاشلة
-        this.loginAttempts = new Map(); // platformId => { count, lockedUntil }
-
-        // ✅ إعدادات
         this.USERNAME_MIN = 3;
         this.USERNAME_MAX = 9;
         this.PASSWORD_MIN = 4;
@@ -22,13 +16,12 @@ export class AccountSystem {
         this.LOCK_DURATION_MINUTES = 5;
         this.SESSION_TIMEOUT_MINUTES = 10;
 
-        console.log('👤 نظام الحسابات تم تهيئته (كلمات فقط - بدون أرقام)');
+        console.log('👤 نظام الحسابات - سوق ريو تم تهيئته');
     }
 
     // ===================================
     // فحص الحساب والجلسات
     // ===================================
-
     async hasAccount(platformId) {
         const player = await Player.findByPlatform(platformId);
         if (!player) return false;
@@ -59,25 +52,22 @@ export class AccountSystem {
         const timeout = this.SESSION_TIMEOUT_MINUTES * 60 * 1000;
 
         for (const [id, session] of this.registrationSessions.entries()) {
-            if (now - session.startedAt > timeout) {
-                this.registrationSessions.delete(id);
-            }
+            if (now - session.startedAt > timeout) this.registrationSessions.delete(id);
         }
 
         for (const [id, session] of this.loginSessions.entries()) {
-            if (now - session.startedAt > timeout) {
-                this.loginSessions.delete(id);
-            }
+            if (now - session.startedAt > timeout) this.loginSessions.delete(id);
         }
     }
 
     // ===================================
-    // رسالة الترحيب (كلمات فقط - بدون أرقام)
+    // 🛒 رسالة الترحيب - سوق ريو
     // ===================================
     getWelcomeMessage(platform = 'facebook') {
         const platformName = platform === 'telegram' ? 'تلغرام' : 'فيسبوك';
 
-        return `🎮 مرحباً بك في مغارة ريو!
+        return `🛒 مرحباً بك في سوق ريو!
+Souq Rio - السوق الرسمي لعالم ريو
 
 👤 ليس لديك حساب بعد على ${platformName}.
 
@@ -99,23 +89,16 @@ export class AccountSystem {
     // ===================================
     // تدفق الإنشاء
     // ===================================
-
     async startRegistration(platformId, platform, displayName) {
         this.registrationSessions.set(platformId, {
             step: 'username',
-            data: {
-                username: null,
-                gender: null,
-                password: null,
-                platform,
-                displayName
-            },
+            data: { username: null, gender: null, password: null, platform, displayName },
             startedAt: Date.now()
         });
 
         return {
             success: true,
-            message: `📝 إنشاء حساب جديد
+            message: `📝 إنشاء حساب في سوق ريو
 
 🔹 الخطوة 1 من 3: اسم المستخدم
 
@@ -132,14 +115,11 @@ export class AccountSystem {
 
     async handleRegistrationStep(platformId, message) {
         const session = this.registrationSessions.get(platformId);
-        if (!session) {
-            return { error: '❌ لا توجد جلسة تسجيل.' };
-        }
+        if (!session) return { error: '❌ لا توجد جلسة تسجيل.' };
 
         const text = message.trim();
         const lower = text.toLowerCase();
 
-        // إلغاء في أي خطوة
         if (lower === 'الغاء' || lower === 'إلغاء' || lower === 'cancel') {
             this.registrationSessions.delete(platformId);
             return {
@@ -151,22 +131,16 @@ export class AccountSystem {
         // ✅ Step 1: Username
         if (session.step === 'username') {
             if (text.length < this.USERNAME_MIN || text.length > this.USERNAME_MAX) {
-                return {
-                    error: `❌ الاسم يجب أن يكون بين ${this.USERNAME_MIN} و ${this.USERNAME_MAX} أحرف.\n\n💡 جرب مرة أخرى:`
-                };
+                return { error: `❌ الاسم يجب أن يكون بين ${this.USERNAME_MIN} و ${this.USERNAME_MAX} أحرف.\n\n💡 جرب مرة أخرى:` };
             }
 
             if (!/^[a-zA-Z0-9]+$/.test(text)) {
-                return {
-                    error: '❌ الاسم يجب أن يكون إنجليزي فقط (حروف وأرقام، بدون مسافات).\n\n💡 جرب مرة أخرى:'
-                };
+                return { error: '❌ الاسم يجب أن يكون إنجليزي فقط (حروف وأرقام، بدون مسافات).\n\n💡 جرب مرة أخرى:' };
             }
 
             const existing = await Player.findByUsername(text);
             if (existing) {
-                return {
-                    error: `❌ الاسم "${text}" مستخدم بالفعل.\n\n💡 اختر اسماً آخر:`
-                };
+                return { error: `❌ الاسم "${text}" مستخدم بالفعل.\n\n💡 اختر اسماً آخر:` };
             }
 
             session.data.username = text;
@@ -192,15 +166,9 @@ export class AccountSystem {
         // ✅ Step 2: Gender
         if (session.step === 'gender') {
             let gender = null;
-            if (['ذكر', 'male', 'رجل', 'ولد'].includes(lower)) {
-                gender = 'male';
-            } else if (['انثى', 'أنثى', 'female', 'بنت', 'فتاة'].includes(lower)) {
-                gender = 'female';
-            } else {
-                return {
-                    error: '❌ اختر "ذكر" أو "أنثى" فقط.\n\n💡 جرب مرة أخرى:'
-                };
-            }
+            if (['ذكر', 'male', 'رجل', 'ولد'].includes(lower)) gender = 'male';
+            else if (['انثى', 'أنثى', 'female', 'بنت', 'فتاة'].includes(lower)) gender = 'female';
+            else return { error: '❌ اختر "ذكر" أو "أنثى" فقط.\n\n💡 جرب مرة أخرى:' };
 
             session.data.gender = gender;
             session.step = 'password';
@@ -226,15 +194,11 @@ export class AccountSystem {
         // ✅ Step 3: Password
         if (session.step === 'password') {
             if (text.length < this.PASSWORD_MIN) {
-                return {
-                    error: `❌ كلمة السر يجب أن تكون ${this.PASSWORD_MIN} أحرف على الأقل.\n\n💡 جرب مرة أخرى:`
-                };
+                return { error: `❌ كلمة السر يجب أن تكون ${this.PASSWORD_MIN} أحرف على الأقل.\n\n💡 جرب مرة أخرى:` };
             }
 
             if (text.length > 50) {
-                return {
-                    error: '❌ كلمة السر طويلة جداً (50 حرف كحد أقصى).\n\n💡 جرب مرة أخرى:'
-                };
+                return { error: '❌ كلمة السر طويلة جداً (50 حرف كحد أقصى).\n\n💡 جرب مرة أخرى:' };
             }
 
             session.data.password = text;
@@ -259,7 +223,7 @@ export class AccountSystem {
             };
         }
 
-        // ✅ Step 4: Confirmation (كلمات فقط - بدون "1")
+        // ✅ Step 4: Confirmation
         if (session.step === 'confirmation') {
             const confirmWords = ['تأكيد', 'موافق', 'نعم', 'confirm', 'yes', 'ok', 'تمام'];
             if (confirmWords.includes(lower)) {
@@ -269,25 +233,19 @@ export class AccountSystem {
             if (lower === 'رجوع' || lower === 'back') {
                 session.step = 'password';
                 session.startedAt = Date.now();
-                return {
-                    success: true,
-                    message: '🔐 أعد كتابة كلمة السر:'
-                };
+                return { success: true, message: '🔐 أعد كتابة كلمة السر:' };
             }
 
-            return {
-                error: '❌ اكتب "تأكيد" أو "موافق" أو "نعم"، أو "الغاء" أو "رجوع".'
-            };
+            return { error: '❌ اكتب "تأكيد" أو "موافق" أو "نعم"، أو "الغاء" أو "رجوع".' };
         }
 
         return { error: '❌ خطأ في الجلسة.' };
     }
 
-    // ✅ إنشاء الحساب فعلياً
+    // ✅ إنشاء الحساب فعلياً - سوق ريو
     async _createAccount(platformId, session) {
         try {
             const data = session.data;
-
             const passwordHash = await bcrypt.hash(data.password, 10);
 
             const player = await Player.createAccount(
@@ -308,7 +266,7 @@ export class AccountSystem {
             return {
                 success: true,
                 player,
-                message: `🎉 تم إنشاء حسابك بنجاح!
+                message: `🎉 تم إنشاء حسابك في سوق ريو بنجاح!
 
 📋 معلومات حسابك:
 
@@ -321,26 +279,28 @@ export class AccountSystem {
 ستحتاجها لتسجيل الدخول من أي منصة.
 لا يمكن استرجاع كلمة السر إذا فقدتها.
 
-🎮 يمكنك الآن:
-• اللعب في مغارة ريو
-• التسوق في سوق ريو
-• استخدام نفس الحساب من فيسبوك وتلغرام
+🛒 يمكنك الآن في سوق ريو:
+• عرض رصيدك: "رصيد"
+• تسوق المنتجات: "متجر"
+• تحويل الريو لأصدقائك: "تحويل"
+• استخدام أكواد الخصم: "خصم [الكود]"
+• بطاقة رصيد مصورة: "بطاقة"
+
+🎮 للعب في مغارة ريو:
+${process.env.GAME_PAGE_URL || 'https://facebook.com/MgaraRio'}
 
 اكتب "مساعدة" لعرض الأوامر.`
             };
         } catch (error) {
             console.error('❌ خطأ في إنشاء الحساب:', error);
             this.registrationSessions.delete(platformId);
-            return {
-                error: '❌ حدث خطأ في إنشاء الحساب. جرب مرة أخرى.'
-            };
+            return { error: '❌ حدث خطأ في إنشاء الحساب. جرب مرة أخرى.' };
         }
     }
 
     // ===================================
     // تدفق تسجيل الدخول
     // ===================================
-
     async startLogin(platformId, platform, displayName) {
         this.loginSessions.set(platformId, {
             step: 'username',
@@ -352,7 +312,7 @@ export class AccountSystem {
 
         return {
             success: true,
-            message: `🔐 تسجيل الدخول
+            message: `🔐 تسجيل الدخول - سوق ريو
 
 📝 اكتب اسم المستخدم:
 
@@ -364,14 +324,11 @@ export class AccountSystem {
 
     async handleLoginStep(platformId, message) {
         const session = this.loginSessions.get(platformId);
-        if (!session) {
-            return { error: '❌ لا توجد جلسة دخول.' };
-        }
+        if (!session) return { error: '❌ لا توجد جلسة دخول.' };
 
         const text = message.trim();
         const lower = text.toLowerCase();
 
-        // إلغاء
         if (lower === 'الغاء' || lower === 'إلغاء' || lower === 'cancel') {
             this.loginSessions.delete(platformId);
             return {
@@ -385,9 +342,7 @@ export class AccountSystem {
             const player = await Player.findByUsername(text);
 
             if (!player) {
-                return {
-                    error: `❌ لا يوجد حساب بهذا الاسم.\n\n💡 تأكد من الاسم أو أنشئ حساباً جديداً.\n\nجرب مرة أخرى:`
-                };
+                return { error: `❌ لا يوجد حساب بهذا الاسم.\n\n💡 تأكد من الاسم أو أنشئ حساباً جديداً.\n\nجرب مرة أخرى:` };
             }
 
             session.username = player.username;
@@ -411,9 +366,7 @@ export class AccountSystem {
             const attempts = this.loginAttempts.get(platformId);
             if (attempts?.lockedUntil && Date.now() < attempts.lockedUntil) {
                 const remaining = Math.ceil((attempts.lockedUntil - Date.now()) / 1000 / 60);
-                return {
-                    error: `🔒 محظور من تسجيل الدخول مؤقتاً.\n\n⏰ حاول بعد ${remaining} دقيقة.`
-                };
+                return { error: `🔒 محظور من تسجيل الدخول مؤقتاً.\n\n⏰ حاول بعد ${remaining} دقيقة.` };
             }
 
             const player = await Player.findByUsername(session.username);
@@ -432,38 +385,29 @@ export class AccountSystem {
                 if (currentAttempts.count >= this.MAX_LOGIN_ATTEMPTS) {
                     currentAttempts.lockedUntil = Date.now() + this.LOCK_DURATION_MINUTES * 60 * 1000;
                     this.loginAttempts.set(platformId, currentAttempts);
-
-                    return {
-                        error: `❌ كلمة السر خاطئة!\n\n🔒 تم حظرك من تسجيل الدخول لمدة ${this.LOCK_DURATION_MINUTES} دقائق.`
-                    };
+                    return { error: `❌ كلمة السر خاطئة!\n\n🔒 تم حظرك من تسجيل الدخول لمدة ${this.LOCK_DURATION_MINUTES} دقائق.` };
                 }
 
                 this.loginAttempts.set(platformId, currentAttempts);
                 const remaining = this.MAX_LOGIN_ATTEMPTS - currentAttempts.count;
 
-                return {
-                    error: `❌ كلمة السر خاطئة!\n\n⚠️ متبقي ${remaining} محاولة قبل الحظر المؤقت.\n\nحاول مرة أخرى:`
-                };
+                return { error: `❌ كلمة السر خاطئة!\n\n⚠️ متبقي ${remaining} محاولة قبل الحظر المؤقت.\n\nحاول مرة أخرى:` };
             }
 
             // ✅ كلمة السر صحيحة
             this.loginAttempts.delete(platformId);
             this.loginSessions.delete(platformId);
 
-            const linkResult = player.linkPlatform(
-                session.platform,
-                platformId,
-                session.displayName
-            );
+            const linkResult = player.linkPlatform(session.platform, platformId, session.displayName);
+            if (linkResult.error) return { error: linkResult.error };
 
-            if (linkResult.error) {
-                return { error: linkResult.error };
-            }
-
-            player.loggedOutPlatforms = (player.loggedOutPlatforms || [])
-                .filter(p => p !== platformId);
-
+            player.loggedOutPlatforms = (player.loggedOutPlatforms || []).filter(p => p !== platformId);
             await player.save();
+
+            // 🛒 رسالة دخول مخصصة لسوق ريو
+            const platformNames = (player.linkedPlatforms || []).map(p =>
+                p.platform === 'telegram' ? 'تلغرام' : 'فيسبوك'
+            ).join(' + ');
 
             return {
                 success: true,
@@ -471,13 +415,19 @@ export class AccountSystem {
                 message: `✅ تم تسجيل الدخول بنجاح!
 
 👤 مرحباً ${player.username}!
+🆔 ID: ${player.playerId}
+📱 المنصات: ${platformNames || 'فيسبوك'}
 
-📊 معلوماتك:
-• المستوى: ${player.level}
-• الرصيد: ${player.gold} ريو
-• ID: ${player.playerId}
+💰 رصيدك في سوق ريو: ${player.gold} ريو
 
-🎮 اكتب "مساعدة" لعرض الأوامر.`
+🛍️ يمكنك الآن:
+• "رصيد" — عرض رصيدك
+• "متجر" — تسوق المنتجات
+• "بطاقة" — بطاقة رصيد مصورة
+• "معاملاتي" — سجل معاملاتك
+• "تحويل" — تحويل الريو
+
+اكتب "مساعدة" للأوامر الكاملة.`
             };
         }
 
@@ -485,34 +435,38 @@ export class AccountSystem {
     }
 
     // ===================================
-    // تسجيل الخروج
+    // تسجيل الخروج - سوق ريو
     // ===================================
-
     async logout(player, platformId) {
         const result = player.unlinkPlatform(platformId);
         if (result.error) return result;
 
         await player.save();
 
+        const gameUrl = process.env.GAME_PAGE_URL || 'https://facebook.com/MgaraRio';
+        const marketUrl = process.env.MARKET_PAGE_URL || 'https://facebook.com/SouqRio';
+
         return {
             success: true,
-            message: `✅ تم تسجيل الخروج بنجاح.
+            message: `✅ تم تسجيل الخروج من سوق ريو.
 
 👤 حسابك: ${player.username}
+💰 رصيدك المحفوظ: ${player.gold} ريو
 
-💡 لديك خيارات:
-• تسجيل دخول من جديد: "بدء"
-• من نفس المنصة
+💡 للعودة:
+• "بدء" — لتسجيل الدخول من جديد
 
-⚠️ ملاحظة: حسابك محفوظ، يمكنك العودة في أي وقت.
-📝 استخدم اسم المستخدم وكلمة السر للدخول.`
+⚠️ حسابك محفوظ، يمكنك العودة في أي وقت.
+📝 استخدم اسم المستخدم وكلمة السر للدخول.
+
+🛒 سوق ريو: ${marketUrl}
+🎮 مغارة ريو: ${gameUrl}`
         };
     }
 
     // ===================================
     // أدوات مساعدة
     // ===================================
-
     _generateReferralCode(playerId) {
         if (!playerId) return null;
         const numericPart = playerId.toString().slice(-5);
@@ -538,4 +492,4 @@ export class AccountSystem {
             this.cleanupOldSessions();
         }, 5 * 60 * 1000);
     }
-                }
+    }

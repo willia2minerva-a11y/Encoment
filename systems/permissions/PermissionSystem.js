@@ -24,11 +24,29 @@ export class PermissionSystem {
         console.log('🔐 نظام الصلاحيات (السوق) تم تهيئته');
     }
 
+    // ✅ هل المستخدم أدمن رئيسي؟
+    isRootAdmin(userId) {
+        if (!userId) return false;
+        const ADMIN_PSID = process.env.ADMIN_PSID;
+        const ADMIN_TELEGRAM_ID = process.env.ADMIN_TELEGRAM_ID;
+
+        // فيسبوك
+        if (ADMIN_PSID && userId === ADMIN_PSID) return true;
+
+        // تلغرام: مع أو بدون tg_
+        if (ADMIN_TELEGRAM_ID) {
+            if (userId === ADMIN_TELEGRAM_ID) return true;
+            if (userId === `tg_${ADMIN_TELEGRAM_ID}`) return true;
+        }
+
+        return false;
+    }
+
     async hasPermission(userId, permissionType) {
         try {
-            const player = await Player.findOne({ userId });
-            if (!player) return false;
             if (this.isRootAdmin(userId)) return true;
+            const player = await Player.findByIdentifier(userId);
+            if (!player) return false;
             return player.hasPermission(permissionType);
         } catch (error) {
             return false;
@@ -53,13 +71,13 @@ export class PermissionSystem {
         return `P${nextId}`;
     }
 
-    async grantPermission(targetUserId, permissionType, grantedBy, durationHours = null) {
+    async grantPermission(targetIdentifier, permissionType, grantedBy, durationHours = null) {
         try {
             if (!this.PERMISSION_TYPES[permissionType]) {
                 return { error: `❌ نوع الصلاحية "${permissionType}" غير صالح.` };
             }
 
-            const target = await Player.findOne({ userId: targetUserId });
+            const target = await Player.findByIdentifier(targetIdentifier);
             if (!target) return { error: '❌ اللاعب غير موجود.' };
 
             let idChanged = false;
@@ -101,9 +119,9 @@ export class PermissionSystem {
         }
     }
 
-    async revokePermission(targetUserId, permissionType) {
+    async revokePermission(targetIdentifier, permissionType) {
         try {
-            const target = await Player.findOne({ userId: targetUserId });
+            const target = await Player.findByIdentifier(targetIdentifier);
             if (!target) return { error: '❌ اللاعب غير موجود.' };
 
             const beforeCount = target.adminPermissions.length;
@@ -121,17 +139,21 @@ export class PermissionSystem {
         }
     }
 
-    async revokeAllPermissions(targetUserId) {
+    async revokeAllPermissions(targetIdentifier) {
         try {
-            const target = await Player.findOne({ userId: targetUserId });
+            const target = await Player.findByIdentifier(targetIdentifier);
             if (!target) return { error: '❌ اللاعب غير موجود.' };
 
             if (!target.adminPermissions || target.adminPermissions.length === 0) {
                 return { error: '❌ اللاعب ليس لديه صلاحيات.' };
             }
 
-            if (this.isRootAdmin(targetUserId)) {
-                return { error: '❌ لا يمكن نزع صلاحيات الأدمن الرئيسي!' };
+            // منع نزع الصلاحيات من الأدمن الرئيسي
+            const targetPlatformIds = (target.linkedPlatforms || []).map(p => p.platformId);
+            for (const pid of targetPlatformIds) {
+                if (this.isRootAdmin(pid)) {
+                    return { error: '❌ لا يمكن نزع صلاحيات الأدمن الرئيسي!' };
+                }
             }
 
             const oldPlayerId = target.playerId;
@@ -151,13 +173,14 @@ export class PermissionSystem {
         }
     }
 
-    async showPlayerPermissions(targetUserId) {
+    async showPlayerPermissions(targetIdentifier) {
         try {
-            const target = await Player.findOne({ userId: targetUserId });
+            const target = await Player.findByIdentifier(targetIdentifier);
             if (!target) return { error: '❌ اللاعب غير موجود.' };
 
             const activePerms = target.getActivePermissions();
-            const isRoot = this.isRootAdmin(targetUserId);
+            const targetPlatformIds = (target.linkedPlatforms || []).map(p => p.platformId);
+            const isRoot = targetPlatformIds.some(pid => this.isRootAdmin(pid));
 
             if (activePerms.length === 0 && !isRoot) {
                 return { message: `👤 ${target.name}\n\n❌ ليس لديه أي صلاحيات.` };
@@ -188,20 +211,22 @@ export class PermissionSystem {
         try {
             const admins = await Player.find({
                 'adminPermissions.0': { $exists: true }
-            }).select('name userId playerId adminPermissions');
+            }).select('name playerId adminPermissions linkedPlatforms');
 
             const activeAdmins = admins.filter(a => a.getActivePermissions().length > 0);
-
-            const rootAdminIds = [
-                process.env.ADMIN_PSID,
-                process.env.ADMIN_TELEGRAM_ID ? `tg_${process.env.ADMIN_TELEGRAM_ID}` : null
-            ].filter(Boolean);
 
             let msg = `👑 قائمة المدراء\n\n`;
             let count = 0;
 
+            // الأدمن الرئيسي (من env)
+            const ADMIN_PSID = process.env.ADMIN_PSID;
+            const ADMIN_TELEGRAM_ID = process.env.ADMIN_TELEGRAM_ID;
+            const rootAdminIds = [];
+            if (ADMIN_PSID) rootAdminIds.push(ADMIN_PSID);
+            if (ADMIN_TELEGRAM_ID) rootAdminIds.push(ADMIN_TELEGRAM_ID);
+
             for (const rootId of rootAdminIds) {
-                const rootPlayer = await Player.findOne({ userId: rootId });
+                const rootPlayer = await Player.findByIdentifier(rootId);
                 if (rootPlayer) {
                     count++;
                     msg += `${count}. 👑 ${rootPlayer.name}\n   🆔 ${rootPlayer.playerId || rootId}\n   📌 الأدمن الرئيسي\n\n`;
@@ -209,7 +234,11 @@ export class PermissionSystem {
             }
 
             for (const admin of activeAdmins) {
-                if (rootAdminIds.includes(admin.userId)) continue;
+                // تخطي الأدمن الرئيسي (تم عرضه)
+                const adminPlatformIds = (admin.linkedPlatforms || []).map(p => p.platformId);
+                const isRootPlayer = adminPlatformIds.some(pid => this.isRootAdmin(pid));
+                if (isRootPlayer) continue;
+
                 count++;
                 const perms = admin.getActivePermissions();
                 const hasFullAdmin = perms.some(p => p.type === 'full_admin');
@@ -225,16 +254,6 @@ export class PermissionSystem {
         }
     }
 
-    isRootAdmin(userId) {
-        const ADMIN_PSID = process.env.ADMIN_PSID;
-        const ADMIN_TELEGRAM_ID = process.env.ADMIN_TELEGRAM_ID;
-        const rootAdmins = [
-            ADMIN_PSID,
-            ADMIN_TELEGRAM_ID ? `tg_${ADMIN_TELEGRAM_ID}` : null
-        ].filter(Boolean);
-        return rootAdmins.includes(userId);
-    }
-
     getPermissionName(type) {
         return this.PERMISSION_TYPES[type] || type;
     }
@@ -242,4 +261,4 @@ export class PermissionSystem {
     getAllPermissionTypes() {
         return Object.keys(this.PERMISSION_TYPES);
     }
-}
+            }

@@ -16,21 +16,15 @@ export class PermissionSystem {
             'modify': 'تعديل الإحصائيات'
         };
 
-        // ✅ نطاق IDs الجديد
-        this.ADMIN_ID_MIN = 1001;       // الأدمن المعيَّن (بعد الأدمن الرئيسي 1000)
+        this.ADMIN_ID_MIN = 1001;
         this.ADMIN_ID_MAX = 1099;
-        this.ROOT_ADMIN_ID = '1000';    // الأدمن الرئيسي
+        this.ROOT_ADMIN_ID = '1000';
         this.PLAYER_ID_MIN = 1100;
         this.PLAYER_ID_MAX = 9999;
 
-        console.log('🔐 نظام الصلاحيات (DB-based) تم تهيئته');
+        console.log('🔐 نظام الصلاحيات (سوق - DB-based) تم تهيئته');
     }
 
-    // ===================================
-    // فحص الأدمن الرئيسي
-    // ===================================
-
-    // ✅ جديد: هل هذا platformId يخص الأدمن الرئيسي؟
     async isRootAdmin(platformId) {
         if (!platformId) return false;
         try {
@@ -43,12 +37,10 @@ export class PermissionSystem {
         }
     }
 
-    // ✅ هل هذا الحساب هو الأدمن الرئيسي؟
     isRootPlayer(player) {
         return player && player.isRoot === true;
     }
 
-    // ✅ جلب حساب الأدمن الرئيسي
     async getRootAdmin() {
         try {
             return await Player.findOne({ isRoot: true });
@@ -57,17 +49,11 @@ export class PermissionSystem {
         }
     }
 
-    // ===================================
-    // فحص الصلاحية
-    // ===================================
     async hasPermission(userId, permissionType) {
         try {
             const player = await Player.findByIdentifier(userId);
             if (!player) return false;
-
-            // الأدمن الرئيسي = كل الصلاحيات
             if (player.isRoot) return true;
-
             return player.hasPermission(permissionType);
         } catch (error) {
             console.error('❌ خطأ في فحص الصلاحية:', error);
@@ -75,11 +61,6 @@ export class PermissionSystem {
         }
     }
 
-    // ===================================
-    // توليد IDs
-    // ===================================
-
-    // ✅ الأدمن المعيَّن: 1001-1099
     async getNextAdminId() {
         const lastId = await Player.getLastAdminNumericId();
         const nextId = lastId + 1;
@@ -91,7 +72,6 @@ export class PermissionSystem {
         return nextId.toString();
     }
 
-    // ✅ اللاعب العادي: P1100+
     async getNextPlayerId() {
         const lastId = await Player.getLastPlayerNumericId();
         const nextId = lastId + 1;
@@ -103,9 +83,6 @@ export class PermissionSystem {
         return `P${nextId}`;
     }
 
-    // ===================================
-    // منح صلاحية
-    // ===================================
     async grantPermission(targetIdentifier, permissionType, grantedBy, durationHours = null) {
         try {
             if (!this.PERMISSION_TYPES[permissionType]) {
@@ -115,7 +92,6 @@ export class PermissionSystem {
             const target = await Player.findByIdentifier(targetIdentifier);
             if (!target) return { error: '❌ اللاعب غير موجود.' };
 
-            // ⚠️ لا يمكن تعديل الأدمن الرئيسي
             if (target.isRoot) {
                 return { error: '❌ لا يمكن تعديل صلاحيات الأدمن الرئيسي.' };
             }
@@ -123,7 +99,6 @@ export class PermissionSystem {
             let idChanged = false;
             let oldId = target.playerId;
 
-            // ✅ تحويل ID لمدير عند منح full_admin
             if (permissionType === 'full_admin') {
                 const isAdminId = /^\d+$/.test(target.playerId);
 
@@ -135,7 +110,6 @@ export class PermissionSystem {
                 }
             }
 
-            // فحص إن كانت الصلاحية موجودة
             const existingPerm = target.adminPermissions.find(p => p.type === permissionType);
 
             if (existingPerm) {
@@ -175,9 +149,6 @@ export class PermissionSystem {
         }
     }
 
-    // ===================================
-    // إزالة صلاحية محددة
-    // ===================================
     async revokePermission(targetIdentifier, permissionType) {
         try {
             const target = await Player.findByIdentifier(targetIdentifier);
@@ -203,9 +174,6 @@ export class PermissionSystem {
         }
     }
 
-    // ===================================
-    // إزالة كل الصلاحيات + إعادة ID لاعب
-    // ===================================
     async revokeAllPermissions(targetIdentifier) {
         try {
             const target = await Player.findByIdentifier(targetIdentifier);
@@ -220,12 +188,9 @@ export class PermissionSystem {
             }
 
             const oldPlayerId = target.playerId;
-
-            // إزالة الصلاحيات
             target.adminPermissions = [];
             target.originalPlayerId = null;
 
-            // ✅ إعطاء ID لاعب عادي جديد (P1100+)
             const newPlayerId = await this.getNextPlayerId();
             target.playerId = newPlayerId;
 
@@ -240,9 +205,6 @@ export class PermissionSystem {
         }
     }
 
-    // ===================================
-    // عرض صلاحيات لاعب
-    // ===================================
     async showPlayerPermissions(targetIdentifier) {
         try {
             const target = await Player.findByIdentifier(targetIdentifier);
@@ -250,7 +212,6 @@ export class PermissionSystem {
 
             const activePerms = target.getActivePermissions();
 
-            // ✅ الأدمن الرئيسي
             if (target.isRoot) {
                 return {
                     message: `👤 ${target.name}\n\n🆔 ID: ${target.playerId}\n📌 الأدمن الرئيسي\n\n👑 جميع الصلاحيات\n• لا يمكن حظره\n• لا يمكن نزعه\n• لا يمكن سجنه`
@@ -282,15 +243,10 @@ export class PermissionSystem {
         }
     }
 
-    // ===================================
-    // قائمة كل المدراء
-    // ===================================
     async showAllAdmins() {
         try {
-            // 1. الأدمن الرئيسي (من DB)
             const rootAdmin = await Player.findOne({ isRoot: true });
 
-            // 2. الأدمن المعيَّن
             const admins = await Player.find({
                 'adminPermissions.0': { $exists: true },
                 isRoot: { $ne: true }
@@ -301,7 +257,6 @@ export class PermissionSystem {
             let msg = '';
             let count = 0;
 
-            // الأدمن الرئيسي
             if (rootAdmin) {
                 count++;
                 msg += `${count}. 👑 ${rootAdmin.name}\n`;
@@ -310,7 +265,6 @@ export class PermissionSystem {
                 msg += `   📱 المنصات: ${(rootAdmin.linkedPlatforms || []).length}\n\n`;
             }
 
-            // المدراء المعيَّنون
             for (const admin of activeAdmins) {
                 count++;
                 const perms = admin.getActivePermissions();
@@ -332,9 +286,6 @@ export class PermissionSystem {
         }
     }
 
-    // ===================================
-    // أدوات مساعدة
-    // ===================================
     getPermissionName(type) {
         return this.PERMISSION_TYPES[type] || type;
     }
@@ -342,4 +293,4 @@ export class PermissionSystem {
     getAllPermissionTypes() {
         return Object.keys(this.PERMISSION_TYPES);
     }
-                    }
+            }

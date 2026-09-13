@@ -1,7 +1,7 @@
 // systems/account/AccountSystem.js
 // الموقع: مشترك - يُنسخ في مغارة ريو + سوق ريو
 import bcrypt from 'bcryptjs';
-import Player from '../../core/Player.js';
+import Player from '../../core/models/Player.js';
 
 export class AccountSystem {
     constructor() {

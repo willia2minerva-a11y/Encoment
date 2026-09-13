@@ -1,5 +1,5 @@
 // systems/admin/AdminSystem.js
-// الموقع: سوق ريو
+// الموقع: مغارة ريو
 import Player from '../../core/models/Player.js';
 import BannedPlayer from '../../core/models/BannedPlayer.js';
 import { items } from '../../data/items.js';
@@ -12,32 +12,29 @@ export class AdminSystem {
         this.autoResponseSystem = new AutoResponseSystem();
         this.permissionSystem = new PermissionSystem();
         this.commandHandler = null;
-        console.log('👑 نظام المدير تم تهيئته');
+        console.log('👑 نظام المدير (DB-based) تم تهيئته');
     }
 
     setCommandHandler(handler) {
         this.commandHandler = handler;
     }
 
-    // ✅ محدّث: يقبل tg_ مع أو بدونه
-    isAdmin(userId) {
+    // ✅ جديد: async — يفحص DB
+    async isRootAdmin(userId) {
         if (!userId) return false;
-        const ADMIN_PSID = process.env.ADMIN_PSID;
-        const ADMIN_TELEGRAM_ID = process.env.ADMIN_TELEGRAM_ID;
-
-        if (ADMIN_PSID && userId === ADMIN_PSID) return true;
-
-        if (ADMIN_TELEGRAM_ID) {
-            if (userId === ADMIN_TELEGRAM_ID) return true;
-            if (userId === `tg_${ADMIN_TELEGRAM_ID}`) return true;
-        }
-
-        return false;
+        const rootAdmin = await Player.findOne({ isRoot: true });
+        if (!rootAdmin) return false;
+        return (rootAdmin.linkedPlatforms || []).some(p => p.platformId === userId);
     }
 
-    async isAdminAsync(userId) {
-        if (this.isAdmin(userId)) return true;
+    // ✅ جديد: async — root OR DB permissions
+    async isAdmin(userId) {
+        if (!userId) return false;
 
+        // 1. root admin
+        if (await this.isRootAdmin(userId)) return true;
+
+        // 2. أدمن معيَّن
         try {
             const player = await Player.findByPlatform(userId);
             if (!player) return false;
@@ -47,8 +44,9 @@ export class AdminSystem {
         }
     }
 
-    isRootAdmin(userId) {
-        return this.permissionSystem.isRootAdmin(userId);
+    // ✅ alias للتوافق
+    async isAdminAsync(userId) {
+        return await this.isAdmin(userId);
     }
 
     _translateRarity(rarity) {
@@ -84,55 +82,11 @@ export class AdminSystem {
         return `${Math.floor(ms / (24 * 60 * 60 * 1000))} يوم`;
     }
 
-    getAdminCommands() {
-        return {
-            'مدير': 'مدير',
-            'موافقة_لاعب': 'موافقة لاعب',
-            'تغيير_اسم': 'تغيير اسم',
-            'تغيير_جنس': 'تغيير جنس',
-            'حظر_لاعب': 'حظر لاعب',
-            'نزع_ادمن': 'نزع أدمن',
-            'قائمة_المحظورين': 'قائمة المحظورين',
-            'حذف_محظور': 'حذف محظور',
-            'اعادة_بيانات': 'اعادة بيانات',
-            'اضف_رد': 'إضافة رد',
-            'ازل_رد': 'إزالة رد',
-            'عرض_الردود': 'عرض الردود',
-            'عرض_اسلحة': 'عرض الأسلحة',
-            'عرض_وحوش': 'عرض الوحوش',
-            'عرض_مواقع': 'عرض المواقع',
-            'عرض_موارد': 'عرض الموارد',
-            'عرض_لاعبين': 'عرض اللاعبين',
-            'اضف_سلاح': 'إضافة سلاح',
-            'حذف_سلاح': 'حذف سلاح',
-            'اضف_وحش': 'إضافة وحش',
-            'حذف_وحش': 'حذف وحش',
-            'اضف_مورد': 'إضافة مورد',
-            'حذف_مورد': 'حذف مورد',
-            'اضف_مهمة': 'إضافة مهمة',
-            'حذف_مهمة': 'حذف مهمة',
-            'قائمة_المهام': 'قائمة المهام',
-            'اعطاء_ادمن': 'إعطاء ادمن',
-            'ازالة_ادمن': 'إزالة ادمن',
-            'اعطاء_صلاحية': 'إعطاء صلاحية',
-            'ازالة_صلاحية': 'إزالة صلاحية',
-            'قائمة_الادمن': 'قائمة الادمن',
-            'صلاحيات': 'صلاحيات',
-            'سجن': 'سجن',
-            'اطلاق': 'إطلاق',
-            'قائمة_المسجونين': 'قائمة المسجونين',
-            'اعطاء_ذهب': 'إعطاء رصيد',
-            'اعطاء_مورد': 'إعطاء مورد',
-            'زيادة_صحة': 'زيادة صحة',
-            'زيادة_مانا': 'زيادة مانا',
-            'اعلان': 'إعلان عام'
-        };
-    }
     getAdminHelp() {
     return `👑 أوامر الأدمن - سوق ريو
 
 📢 الإعلان
-• اعلان [النص] - إرسال إعلان لكل اللاعبين
+• اعلان [النص]
 
 💰 الرصيد
 • اعطاء_ذهب [ID] [الكمية]
@@ -159,9 +113,9 @@ export class AdminSystem {
 
 💡 الأوامر تقبل أي شكل:
 موافقة_لاعب | موافقة لاعب | موافقةلاعب`;
-                }
+    }
 
-        _getCommandMap() {
+    _getCommandMap() {
         return {
             'مدير': 'مدير',
             'موافقةلاعب': 'موافقة_لاعب',
@@ -211,7 +165,6 @@ export class AdminSystem {
         const commandMap = this._getCommandMap();
         const canonicalCommand = commandMap[normalizedCommand] || command;
 
-        // ✅ محدّث: يستخدم Player.findByIdentifier
         const findTargetPlayer = async (id) => {
             if (!id) return null;
             return await Player.findByIdentifier(id);
@@ -220,11 +173,11 @@ export class AdminSystem {
         switch (canonicalCommand) {
             case 'مدير': return this.getAdminHelp();
             case 'موافقة_لاعب': return await this.handleApprovePlayer(args, senderId);
-            case 'اعادة_بيانات': return await this.handleResetPlayer(args, findTargetPlayer);
+            case 'اعادة_بيانات': return await this.handleResetPlayer(args, findTargetPlayer, player);
             case 'تغيير_اسم': return await this.handleSetPlayerName(args, findTargetPlayer);
             case 'تغيير_جنس': return await this.handleSetPlayerGender(args, findTargetPlayer);
             case 'حظر_لاعب': return await this.handleBanPlayer(args, findTargetPlayer, senderId);
-            case 'نزع_ادمن': return await this.handleRevokeAdmin(args, senderId);
+            case 'نزع_ادمن': return await this.handleRevokeAdmin(args, senderId, player);
             case 'قائمة_المحظورين': return await this.handleBannedList(args);
             case 'حذف_محظور': return await this.handleRemoveBanned(args, senderId);
             case 'اعطاء_ذهب': return await this.handleGiveGold(args, findTargetPlayer);
@@ -248,40 +201,39 @@ export class AdminSystem {
             case 'اضف_مهمة': return await this.handleAddTaskCommand(args, senderId);
             case 'حذف_مهمة': return await this.handleRemoveTaskCommand(args, senderId);
             case 'قائمة_المهام': return await this.handleListTasksCommand(args, senderId);
-            case 'اعطاء_ادمن': return await this.handleGrantAdmin(args, senderId);
-            case 'ازالة_ادمن': return await this.handleRevokeAdmin(args, senderId);
-            case 'اعطاء_صلاحية': return await this.handleGrantPermission(args, senderId);
-            case 'ازالة_صلاحية': return await this.handleRevokePermission(args, senderId);
+            case 'اعطاء_ادمن': return await this.handleGrantAdmin(args, senderId, player);
+            case 'ازالة_ادمن': return await this.handleRevokeAdmin(args, senderId, player);
+            case 'اعطاء_صلاحية': return await this.handleGrantPermission(args, senderId, player);
+            case 'ازالة_صلاحية': return await this.handleRevokePermission(args, senderId, player);
             case 'قائمة_الادمن': return await this.handleListAdmins(senderId);
             case 'صلاحيات': return await this.handleShowPermissions(args, senderId);
-            case 'سجن': return await this.handleJail(args, senderId);
-            case 'اطلاق': return await this.handleRelease(args, senderId);
-            case 'قائمة_المسجونين': return await this.handleJailList(senderId);
+            case 'سجن': return await this.handleJail(args, senderId, player);
+            case 'اطلاق': return await this.handleRelease(args, senderId, player);
+            case 'قائمة_المسجونين': return await this.handleJailList(senderId, player);
             case 'اعلان': return await this.handleAnnouncement(args, senderId, player);
             default: return null;
         }
     }
 
-    // ✅ الإعلان
+    // ===================================
+    // الإعلان
+    // ===================================
     async handleAnnouncement(args, senderId, senderPlayer) {
-        if (!this.isAdmin(senderId)) {
-            const adminPlayer = await Player.findByPlatform(senderId);
-            if (!adminPlayer || !adminPlayer.hasPermission('full_admin')) {
-                return '❌ ليس لديك صلاحية الإعلان.';
-            }
+        const isRoot = senderPlayer && senderPlayer.isRoot;
+        const isDBAdmin = senderPlayer && senderPlayer.hasPermission && senderPlayer.hasPermission('full_admin');
+
+        if (!isRoot && !isDBAdmin) {
+            return '❌ ليس لديك صلاحية الإعلان.';
         }
 
         if (args.length === 0) {
             return `❌ الاستخدام: اعلان [النص]
 
 📝 مثال:
-اعلان اليوم في مسابقة على الساعة 8 مساءً!
-
-💡 سيُرسل لكل اللاعبين.`;
+اعلان اليوم في مسابقة على الساعة 8 مساءً!`;
         }
 
         const announcementText = args.join(' ');
-        
         if (announcementText.length > 1000) {
             return '❌ الإعلان طويل جداً (الحد الأقصى 1000 حرف).';
         }
@@ -306,7 +258,7 @@ ${announcementText}
         return {
             _announcement: true,
             text: announcement,
-            recipients: allPlayers.map(p => 
+            recipients: allPlayers.map(p =>
                 (p.linkedPlatforms || []).map(lp => ({
                     platform: lp.platform,
                     platformId: lp.platformId
@@ -328,9 +280,7 @@ ${announcementText}
                 banned: { $ne: true }
             }).select('username playerId linkedPlatforms createdAt').sort({ createdAt: 1 });
 
-            if (pendingPlayers.length === 0) {
-                return '✅ لا يوجد لاعبين بانتظار الموافقة.';
-            }
+            if (pendingPlayers.length === 0) return '✅ لا يوجد لاعبين بانتظار الموافقة.';
 
             let message = `⏳ اللاعبين المنتظرين (${pendingPlayers.length}):\n\n`;
             pendingPlayers.forEach((p, index) => {
@@ -364,21 +314,16 @@ ${announcementText}
         const target = await findTargetPlayer(targetId);
         if (!target) return `❌ لم يتم العثور على اللاعب ${targetId}.`;
 
-        const targetPlatformIds = (target.linkedPlatforms || []).map(p => p.platformId);
-        if (targetPlatformIds.some(pid => this.isRootAdmin(pid))) {
-            return '❌ لا يمكن حظر الأدمن الرئيسي!';
-        }
+        if (target.isRoot) return '❌ لا يمكن حظر الأدمن الرئيسي!';
 
         const isBanning = banStatusRaw === 'true' || banStatusRaw === 'صحيح' || banStatusRaw === 'حظر';
 
         if (isBanning) {
             const alreadyBanned = await BannedPlayer.findOne({ userId: target.username });
-            if (alreadyBanned) {
-                return `❌ اللاعب ${target.username} محظور بالفعل.`;
-            }
+            if (alreadyBanned) return `❌ اللاعب ${target.username} محظور بالفعل.`;
 
             const bannedPlatforms = target.linkedPlatforms || [];
-            
+
             await BannedPlayer.create({
                 userId: target.username,
                 name: target.username,
@@ -401,49 +346,26 @@ ${announcementText}
             return `🚫 تم حظر اللاعب نهائياً
 
 👤 اسم المستخدم: ${oldUsername}
-🆔 ID: ${oldId}
-
-📋 الإجراءات:
-• نقل إلى قائمة المحظورين
-• حذف الحساب بالكامل
-• الاسم متاح الآن
-• ID متاح الآن
-
-💡 للعرض: قائمة_المحظورين`;
+🆔 ID: ${oldId}`;
         } else {
             const bannedRecord = await BannedPlayer.findOne({ userId: target.username });
-            if (!bannedRecord) {
-                return `❌ اللاعب ${target.username} غير محظور.`;
-            }
+            if (!bannedRecord) return `❌ اللاعب ${target.username} غير محظور.`;
 
             await BannedPlayer.deleteOne({ userId: target.username });
-
             return `✅ تم رفع الحظر عن ${bannedRecord.name}`;
         }
     }
 
-    async handleRevokeAdmin(args, senderId) {
-        const sender = await Player.findByPlatform(senderId);
-        const isRoot = this.isRootAdmin(senderId);
-        const senderHasFull = sender && sender.hasPermission('full_admin');
+    async handleRevokeAdmin(args, senderId, senderPlayer) {
+        const isRoot = senderPlayer && senderPlayer.isRoot;
+        const senderHasFull = senderPlayer && senderPlayer.hasPermission && senderPlayer.hasPermission('full_admin');
 
-        if (!isRoot && !senderHasFull) {
-            return '❌ ليس لديك صلاحية.';
-        }
-
-        if (args.length < 1) {
-            return `❌ الاستخدام: نزع_ادمن [ID]
-
-💡 يزيل صلاحيات الأدمن ويعطيه ID لاعب عادي.`;
-        }
+        if (!isRoot && !senderHasFull) return '❌ ليس لديك صلاحية.';
+        if (args.length < 1) return `❌ الاستخدام: نزع_ادمن [ID]`;
 
         const target = await Player.findByIdentifier(args[0]);
         if (!target) return `❌ لم يتم العثور على اللاعب.`;
-
-        const targetPlatformIds = (target.linkedPlatforms || []).map(p => p.platformId);
-        if (targetPlatformIds.some(pid => this.isRootAdmin(pid))) {
-            return '❌ لا يمكن نزع صلاحيات الأدمن الرئيسي!';
-        }
+        if (target.isRoot) return '❌ لا يمكن نزع صلاحيات الأدمن الرئيسي!';
 
         const result = await this.permissionSystem.revokeAllPermissions(args[0]);
         return result.error || result.message;
@@ -452,7 +374,6 @@ ${announcementText}
     async handleBannedList(args) {
         const page = parseInt(args[0]) || 1;
         const result = await BannedPlayer.getBannedList(page);
-
         if (result.error) return result.error;
 
         let msg = `🚫 قائمة المحظورين - صفحة ${result.page}/${result.totalPages}\n`;
@@ -462,7 +383,6 @@ ${announcementText}
             const rank = (result.page - 1) * 20 + index + 1;
             const date = new Date(b.bannedAt).toLocaleDateString('ar-EG');
             const icon = b.wasAdmin ? '👑🚫' : '🚫';
-
             msg += `${rank}. ${icon} ${b.name}\n`;
             msg += `   🆔 ${b.playerId || 'N/A'}\n`;
             msg += `   📅 ${date}\n`;
@@ -470,27 +390,21 @@ ${announcementText}
         });
 
         msg += `💡 للتنقل: قائمة_المحظورين [رقم]`;
-        msg += `\n💡 لحذف محظور: حذف_محظور [ID]`;
-
         return msg;
     }
 
     async handleRemoveBanned(args, senderId) {
         if (args.length === 0) return '❌ الاستخدام: حذف_محظور [ID]';
-
         const identifier = args.join(' ');
         const result = await BannedPlayer.removeBan(identifier);
-
         if (result.error) return result.error;
-
         return `✅ تم حذف ${result.info.name} من قائمة المحظورين.`;
     }
 
-    async handleResetPlayer(args, findTargetPlayer) {
+    async handleResetPlayer(args, findTargetPlayer, senderPlayer) {
         const target = await findTargetPlayer(args[0]);
         if (!target) return `❌ لم يتم العثور.`;
-        const targetPlatformIds = (target.linkedPlatforms || []).map(p => p.platformId);
-        if (targetPlatformIds.some(pid => this.isRootAdmin(pid))) return '❌ لا يمكن!';
+        if (target.isRoot) return '❌ لا يمكن!';
         const oldUsername = target.username;
         await target.deleteOne();
         return `🗑️ تم مسح ${oldUsername}.`;
@@ -581,11 +495,13 @@ ${announcementText}
             .sort({ level: -1 })
             .skip(skip)
             .limit(perPage)
-            .select('username playerId linkedPlatforms level gold');
+            .select('username playerId linkedPlatforms level gold isRoot');
+
         let msg = `📋 اللاعبون - صفحة ${page}/${totalPages}\n📊 الإجمالي: ${total}\n\n`;
         players.forEach((p, i) => {
             const rank = skip + i + 1;
-            msg += `${rank}. 👤 ${p.username}\n`;
+            const icon = p.isRoot ? '👑' : '👤';
+            msg += `${rank}. ${icon} ${p.username}\n`;
             msg += `   🆔 ${p.playerId || 'N/A'}\n`;
             msg += `   📊 Lv.${p.level} | 💰 ${p.gold} ريو\n\n`;
         });
@@ -757,10 +673,10 @@ ${announcementText}
         return msg;
     }
 
-    async handleGrantAdmin(args, senderId) {
-        const sender = await Player.findByPlatform(senderId);
-        const isRoot = this.isRootAdmin(senderId);
-        const senderHasFull = sender && sender.hasPermission('full_admin');
+    async handleGrantAdmin(args, senderId, senderPlayer) {
+        const isRoot = senderPlayer && senderPlayer.isRoot;
+        const senderHasFull = senderPlayer && senderPlayer.hasPermission && senderPlayer.hasPermission('full_admin');
+
         if (!isRoot && !senderHasFull) return '❌ ليس لديك صلاحية.';
         if (args.length < 1) return `❌ الاستخدام: اعطاء_ادمن [ID] [مدة]`;
 
@@ -769,10 +685,10 @@ ${announcementText}
         return result.error || result.message;
     }
 
-    async handleGrantPermission(args, senderId) {
-        const sender = await Player.findByPlatform(senderId);
-        const isRoot = this.isRootAdmin(senderId);
-        const senderHasFull = sender && sender.hasPermission('full_admin');
+    async handleGrantPermission(args, senderId, senderPlayer) {
+        const isRoot = senderPlayer && senderPlayer.isRoot;
+        const senderHasFull = senderPlayer && senderPlayer.hasPermission && senderPlayer.hasPermission('full_admin');
+
         if (!isRoot && !senderHasFull) return '❌ ليس لديك صلاحية.';
         if (args.length < 2) return '❌ الاستخدام: اعطاء_صلاحية [ID] [النوع] [مدة]';
 
@@ -781,10 +697,10 @@ ${announcementText}
         return result.error || result.message;
     }
 
-    async handleRevokePermission(args, senderId) {
-        const sender = await Player.findByPlatform(senderId);
-        const isRoot = this.isRootAdmin(senderId);
-        const senderHasFull = sender && sender.hasPermission('full_admin');
+    async handleRevokePermission(args, senderId, senderPlayer) {
+        const isRoot = senderPlayer && senderPlayer.isRoot;
+        const senderHasFull = senderPlayer && senderPlayer.hasPermission && senderPlayer.hasPermission('full_admin');
+
         if (!isRoot && !senderHasFull) return '❌ ليس لديك صلاحية.';
         if (args.length < 2) return '❌ الاستخدام: ازالة_صلاحية [ID] [النوع]';
 
@@ -803,19 +719,16 @@ ${announcementText}
         return result.error || result.message;
     }
 
-    async handleJail(args, senderId) {
-        const sender = await Player.findByPlatform(senderId);
-        const isRoot = this.isRootAdmin(senderId);
-        const hasJailPerm = sender && sender.hasPermission('jail');
+    async handleJail(args, senderId, senderPlayer) {
+        const isRoot = senderPlayer && senderPlayer.isRoot;
+        const hasJailPerm = senderPlayer && senderPlayer.hasPermission && senderPlayer.hasPermission('jail');
+
         if (!isRoot && !hasJailPerm) return '❌ ليس لديك صلاحية.';
         if (args.length < 1) return '❌ الاستخدام: سجن [ID] [مدة]';
 
         const target = await Player.findByIdentifier(args[0]);
         if (!target) return `❌ لم يتم العثور.`;
-
-        const targetPlatformIds = (target.linkedPlatforms || []).map(p => p.platformId);
-        if (targetPlatformIds.includes(senderId)) return '❌ لا يمكنك سجن نفسك!';
-        if (targetPlatformIds.some(pid => this.isRootAdmin(pid))) return '❌ لا يمكن سجن الأدمن الرئيسي!';
+        if (target.isRoot) return '❌ لا يمكن سجن الأدمن الرئيسي!';
 
         const durationInput = args[1];
         if (durationInput) {
@@ -837,10 +750,10 @@ ${announcementText}
         }
     }
 
-    async handleRelease(args, senderId) {
-        const sender = await Player.findByPlatform(senderId);
-        const isRoot = this.isRootAdmin(senderId);
-        const hasJailPerm = sender && sender.hasPermission('jail');
+    async handleRelease(args, senderId, senderPlayer) {
+        const isRoot = senderPlayer && senderPlayer.isRoot;
+        const hasJailPerm = senderPlayer && senderPlayer.hasPermission && senderPlayer.hasPermission('jail');
+
         if (!isRoot && !hasJailPerm) return '❌ ليس لديك صلاحية.';
         if (args.length < 1) return '❌ الاستخدام: اطلاق [ID]';
 
@@ -856,10 +769,10 @@ ${announcementText}
         return `✅ تم إطلاق ${target.username}.`;
     }
 
-    async handleJailList(senderId) {
-        const sender = await Player.findByPlatform(senderId);
-        const isRoot = this.isRootAdmin(senderId);
-        const hasJailPerm = sender && sender.hasPermission('jail');
+    async handleJailList(senderId, senderPlayer) {
+        const isRoot = senderPlayer && senderPlayer.isRoot;
+        const hasJailPerm = senderPlayer && senderPlayer.hasPermission && senderPlayer.hasPermission('jail');
+
         if (!isRoot && !hasJailPerm) return '❌ ليس لديك صلاحية.';
 
         const now = new Date();
@@ -885,4 +798,4 @@ ${announcementText}
     findAutoResponse(message) {
         return this.autoResponseSystem.findAutoResponse(message);
     }
-            }
+}

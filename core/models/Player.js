@@ -1,9 +1,8 @@
 // core/Player.js
-// الموقع: سوق ريو
+// الموقع: مغارة ريو
 import mongoose from 'mongoose';
 import { DataLoader } from '../../systems/data/DataLoader.js';
 
-// ✅ بدلاً من global.itemsData
 Object.defineProperty(global, 'itemsData', {
     get: () => DataLoader.getItems(),
     configurable: true
@@ -70,6 +69,10 @@ const playerSchema = new mongoose.Schema({
     playerId: { type: String, unique: true, sparse: true },
     originalPlayerId: { type: String, default: null },
     name: { type: String, default: null },
+    
+    // ✅ جديد: تحديد الأدمن الرئيسي
+    isRoot: { type: Boolean, default: false, index: true },
+    
     registrationStatus: { 
         type: String, 
         enum: ['pending', 'approved', 'completed'], 
@@ -237,6 +240,7 @@ playerSchema.methods.getActivePermissions = function() {
 };
 
 playerSchema.methods.hasPermission = function(permissionType) {
+    if (this.isRoot) return true;  // ✅ Root = كل الصلاحيات
     const perms = this.getActivePermissions();
     if (perms.some(p => p.type === 'full_admin')) return true;
     return perms.some(p => p.type === permissionType);
@@ -453,6 +457,7 @@ playerSchema.pre('save', function(next) {
 // Statics
 // ===================================
 
+// ✅ يبدأ من 1099 (بعد الأدمن الرئيسي 1000 والأدمن المعيَّن 1001-1099)
 playerSchema.statics.getLastPlayerNumericId = async function() {
     const last = await this.findOne({ playerId: { $regex: /^P\d+$/ } }).sort({ playerId: -1 }).exec();
     if (last?.playerId) {
@@ -462,13 +467,17 @@ playerSchema.statics.getLastPlayerNumericId = async function() {
     return 1099;
 };
 
+// ✅ يبدأ من 1000 (الأدمن الرئيسي) — يتجاهله
 playerSchema.statics.getLastAdminNumericId = async function() {
-    const last = await this.findOne({ playerId: { $regex: /^\d+$/ } }).sort({ playerId: -1 }).exec();
+    const last = await this.findOne({
+        playerId: { $regex: /^\d+$/ },
+        isRoot: { $ne: true }
+    }).sort({ playerId: -1 }).exec();
     if (last?.playerId) {
         const id = parseInt(last.playerId, 10);
-        if (!isNaN(id) && id >= 1000) return id;
+        if (!isNaN(id) && id >= 1001) return id;
     }
-    return 999;
+    return 1000; // الأدمن الرئيسي 1000 → next = 1001
 };
 
 playerSchema.statics.findByUsername = async function(username) {
@@ -481,41 +490,117 @@ playerSchema.statics.findByPlatform = async function(platformId) {
     return await this.findOne({ 'linkedPlatforms.platformId': platformId });
 };
 
-// ✅ محدّث: يقبل 1100 و P1100 و 1050 (أدمن)
+// ✅ يقبل: اسم، P1100، 1100، 1000، 1050
 playerSchema.statics.findByIdentifier = async function(identifier) {
     if (!identifier) return null;
     const clean = identifier.trim();
 
-    // 1. بالاسم (username)
+    // 1. بالاسم
     let player = await this.findOne({ username: clean.toLowerCase() });
     if (player) return player;
 
-    // 2. بـ playerId كما هو (للأدمن: "1050")
+    // 2. بـ playerId مباشر (للأدمن: "1000" و "1050")
     player = await this.findOne({ playerId: clean });
     if (player) return player;
 
-    // 3. بـ playerId uppercase
+    // 3. uppercase
     player = await this.findOne({ playerId: clean.toUpperCase() });
     if (player) return player;
 
-    // ✅ 4. إذا كان أرقاماً فقط، جرّب P+النص (للاعب: "1100" → "P1100")
+    // 4. أرقام → جرّب P+النص ("1100" → "P1100")
     if (/^\d+$/.test(clean)) {
         player = await this.findOne({ playerId: `P${clean}` });
         if (player) return player;
     }
 
-    // ✅ 5. إذا بدأ بـ P، جرّب الأرقام فقط (للأدمن: "P1050" → "1050")
+    // 5. P+أرقام → جرّب الأرقام فقط ("P1000" → "1000")
     if (/^P\d+$/i.test(clean)) {
         const numericPart = clean.substring(1);
         player = await this.findOne({ playerId: numericPart });
         if (player) return player;
     }
 
-    // 6. بـ platformId
+    // 6. platformId
     player = await this.findOne({ 'linkedPlatforms.platformId': clean });
     if (player) return player;
 
     return null;
+};
+
+// ✅ جديد: إنشاء/تحديث الأدمن الرئيسي
+playerSchema.statics.ensureRootAdmin = async function() {
+    const username = (process.env.ADMIN_USERNAME || 'admin').toLowerCase().trim();
+    const password = process.env.ADMIN_PASSWORD;
+
+    if (!password) {
+        console.error('⚠️ ADMIN_PASSWORD غير محدد في .env — لن يتم إنشاء الأدمن الرئيسي');
+        return null;
+    }
+
+    const bcrypt = (await import('bcryptjs')).default;
+    const passwordHash = await bcrypt.hash(password, 10);
+
+    let rootAdmin = await this.findOne({ isRoot: true });
+
+    if (!rootAdmin) {
+        // ✅ إنشاء جديد
+        rootAdmin = new this({
+            username,
+            passwordHash,
+            gender: 'male',
+            name: 'الأدمن الرئيسي',
+            playerId: '1000',
+            isRoot: true,
+            registrationStatus: 'completed',
+            level: 1,
+            gold: 0,
+            health: 100,
+            maxHealth: 100,
+            mana: 50,
+            maxMana: 50,
+            stamina: 100,
+            maxStamina: 100,
+            currentLocation: 'forest',
+            inventory: [],
+            skills: { gathering: 1, combat: 1, crafting: 1 },
+            equipment: { weapon: null, armor: null, accessory: null, tool: null },
+            stats: { battlesWon: 0, battlesLost: 0, monstersKilled: 0, questsCompleted: 0, resourcesGathered: 0, itemsCrafted: 0 },
+            bonusStats: { attack: 0, defense: 0, maxHealth: 0, maxMana: 0, maxStamina: 0 },
+            activeEffects: [],
+            adminPermissions: [],
+            linkedPlatforms: []
+        });
+        await rootAdmin.save();
+        console.log(`✅ تم إنشاء الأدمن الرئيسي (ID: 1000) - username: ${username}`);
+    } else {
+        // ✅ تحديث الموجود
+        let changed = false;
+        if (rootAdmin.username !== username) {
+            rootAdmin.username = username;
+            changed = true;
+        }
+        if (rootAdmin.passwordHash !== passwordHash) {
+            rootAdmin.passwordHash = passwordHash;
+            changed = true;
+        }
+        if (rootAdmin.playerId !== '1000') {
+            rootAdmin.originalPlayerId = rootAdmin.playerId;
+            rootAdmin.playerId = '1000';
+            changed = true;
+        }
+        if (!rootAdmin.isRoot) {
+            rootAdmin.isRoot = true;
+            changed = true;
+        }
+        if (changed) {
+            await rootAdmin.save();
+            console.log(`✅ تم تحديث الأدمن الرئيسي (ID: 1000) - username: ${username}`);
+        } else {
+            console.log(`ℹ️ الأدمن الرئيسي موجود بالفعل (ID: 1000)`);
+        }
+    }
+
+    return rootAdmin;
 };
 
 playerSchema.statics.createAccount = async function(username, passwordHash, gender, platform, platformId, displayName) {
@@ -530,6 +615,7 @@ playerSchema.statics.createAccount = async function(username, passwordHash, gend
         gender,
         name: username,
         playerId: newPlayerId,
+        isRoot: false,
         registrationStatus: 'completed',
         linkedPlatforms: [{
             platform,
@@ -570,7 +656,7 @@ playerSchema.statics.createAccount = async function(username, passwordHash, gend
 const Player = mongoose.model('Player', playerSchema);
 
 // ===================================
-// ✅ إصلاح: حذف الفهارس القديمة (userId_1)
+// ✅ حذف الفهارس القديمة
 // ===================================
 (async () => {
     try {
@@ -583,7 +669,7 @@ const Player = mongoose.model('Player', playerSchema);
         await waitForConnection();
 
         if (mongoose.connection.readyState !== 1) {
-            console.log('ℹ️ [سوق ريو] لم يتم الاتصال بـ MongoDB، تخطي حذف الفهارس');
+            console.log('ℹ️ [سوق ريو] لم يتم الاتصال بـ MongoDB');
             return;
         }
 

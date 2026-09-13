@@ -1,6 +1,6 @@
 // systems/admin/AdminSystem.js
 // الموقع: مشترك - يُنسخ في مغارة ريو + سوق ريو
-import Player from '../../core/Player.js';
+import Player from '../../core/models/Player.js';   // ✅
 import BannedPlayer from '../../core/models/BannedPlayer.js';
 import { items } from '../../data/items.js';
 import { AutoResponseSystem } from '../autoResponse/AutoResponseSystem.js';

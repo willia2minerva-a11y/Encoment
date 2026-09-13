@@ -240,7 +240,9 @@ async function main() {
 
     // ✅ 2. تحميل البيانات من MongoDB
     await DataLoader.initialize();
-
+    const Player = (await import('./core/models/Player.js')).default;
+    await Player.ensureRootAdmin();
+    
     // ✅ 3. CommandHandler
     commandHandler = new CommandHandler();
     console.log('✅ تم تهيئة CommandHandler');

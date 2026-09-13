@@ -1,13 +1,17 @@
 // core/Player.js
+// الموقع: لعبة مغارة ريو (والسوق يستخدم نسخة مشابهة)
 import mongoose from 'mongoose';
-import { items } from '../../data/items.js';   // ✅ يبحث في src/data/
+import { DataLoader } from '../systems/data/DataLoader.js';   // ✅ جديد
 
-global.itemsData = items;
+// ✅ بدلاً من global.itemsData
+Object.defineProperty(global, 'itemsData', {
+    get: () => DataLoader.getItems(),
+    configurable: true
+});
 
 // ===================================
 // Schemas فرعية
 // ===================================
-
 const inventoryItemSchema = new mongoose.Schema({
     id: { type: String, required: true },
     name: { type: String, required: true },
@@ -30,7 +34,6 @@ const adminPermissionSchema = new mongoose.Schema({
     expiresAt: { type: Date, default: null }
 }, { _id: false });
 
-// ✅ جديد - ربط المنصات
 const linkedPlatformSchema = new mongoose.Schema({
     platform: { 
         type: String, 
@@ -46,9 +49,8 @@ const linkedPlatformSchema = new mongoose.Schema({
 // ===================================
 // Player Schema
 // ===================================
-
 const playerSchema = new mongoose.Schema({
-    // ✅ الحساب الجديد
+    // ✅ الحساب
     username: { 
         type: String, 
         unique: true, 
@@ -65,17 +67,15 @@ const playerSchema = new mongoose.Schema({
     
     // ✅ ربط المنصات
     linkedPlatforms: [linkedPlatformSchema],
-    
-    // حالة تسجيل الخروج (بعد logout)
     loggedOutPlatforms: { type: [String], default: [] },
     
-    // معلومات اللاعب (باقي الحقول)
+    // معلومات اللاعب
     playerId: { type: String, unique: true, sparse: true },
     name: { type: String, default: null },
     registrationStatus: { 
         type: String, 
         enum: ['pending', 'approved', 'completed'], 
-        default: 'completed'  // ✅ مباشرة
+        default: 'completed'
     },
     approvedAt: { type: Date, default: null },
     approvedBy: { type: String, default: null },
@@ -173,16 +173,12 @@ const playerSchema = new mongoose.Schema({
 // Methods
 // ===================================
 
-// ✅ فحص المنصة المرتبطة
 playerSchema.methods.isLinkedTo = function(platformId) {
     return (this.linkedPlatforms || []).some(p => p.platformId === platformId);
 };
 
-// ✅ ربط منصة جديدة
 playerSchema.methods.linkPlatform = function(platform, platformId, displayName = null) {
     this.linkedPlatforms = this.linkedPlatforms || [];
-    
-    // فحص إن كانت مرتبطة
     const existing = this.linkedPlatforms.find(p => p.platformId === platformId);
     
     if (existing) {
@@ -191,7 +187,6 @@ playerSchema.methods.linkPlatform = function(platform, platformId, displayName =
         return { success: true, alreadyLinked: true };
     }
     
-    // حد أقصى 5 منصات
     if (this.linkedPlatforms.length >= 5) {
         return { error: '❌ الحد الأقصى 5 منصات لكل حساب.' };
     }
@@ -207,13 +202,11 @@ playerSchema.methods.linkPlatform = function(platform, platformId, displayName =
     return { success: true };
 };
 
-// ✅ فصل منصة (logout)
 playerSchema.methods.unlinkPlatform = function(platformId) {
     this.linkedPlatforms = (this.linkedPlatforms || []).filter(
         p => p.platformId !== platformId
     );
     
-    // إضافة للقائمة السوداء للجلسات
     if (!this.loggedOutPlatforms.includes(platformId)) {
         this.loggedOutPlatforms.push(platformId);
     }
@@ -221,28 +214,22 @@ playerSchema.methods.unlinkPlatform = function(platformId) {
     return { success: true };
 };
 
-// ✅ تحديث آخر نشاط
 playerSchema.methods.updateLastActive = function(platformId) {
     const linked = (this.linkedPlatforms || []).find(p => p.platformId === platformId);
-    if (linked) {
-        linked.lastActive = new Date();
-    }
+    if (linked) linked.lastActive = new Date();
 };
 
-// ✅ فحص الجلسة
 playerSchema.methods.hasActiveSession = function(platformId) {
     return this.isLinkedTo(platformId) && 
            !this.loggedOutPlatforms.includes(platformId);
 };
 
-// ✅ فحص السجن
 playerSchema.methods.isJailed = function() {
     if (!this.jailedUntil) return false;
     if (this.jailedUntil.getTime() === 0) return true;
     return this.jailedUntil > new Date();
 };
 
-// ✅ الصلاحيات
 playerSchema.methods.getActivePermissions = function() {
     const now = new Date();
     return (this.adminPermissions || []).filter(p => {
@@ -257,7 +244,6 @@ playerSchema.methods.hasPermission = function(permissionType) {
     return perms.some(p => p.type === permissionType);
 };
 
-// ✅ إضافة معاملة
 playerSchema.methods.addTransaction = function(type, amount, description, targetPlayer = null) {
     this.transactions = this.transactions || [];
     this.transactions.push({
@@ -271,12 +257,11 @@ playerSchema.methods.addTransaction = function(type, amount, description, target
     });
 };
 
-// ✅ سجلات أخرى (من النسخة القديمة)
-playerSchema.methods.regenerate = function() { /* ... نفس القديم ... */ return false; };
 playerSchema.methods.isApproved = function() { return this.registrationStatus === 'completed'; };
 playerSchema.methods.isPending = function() { return this.registrationStatus === 'pending'; };
 playerSchema.methods.isApprovedButNotCompleted = function() { return this.registrationStatus === 'approved'; };
-playerSchema.methods.getActualStamina = function() { 
+
+playerSchema.methods.getActualStamina = function() {
     const maxStam = this.maxStamina || 100;
     const lastActionTime = this.lastStaminaAction ? this.lastStaminaAction.getTime() : Date.now();
     const now = Date.now();
@@ -286,6 +271,7 @@ playerSchema.methods.getActualStamina = function() {
     if (recoveredStamina > 0) this.lastStaminaAction = new Date(now);
     return this.stamina;
 };
+
 playerSchema.methods.useStamina = function(amount) {
     const actualStamina = this.getActualStamina();
     if (actualStamina >= amount) {
@@ -295,10 +281,12 @@ playerSchema.methods.useStamina = function(amount) {
     }
     return false;
 };
+
 playerSchema.methods.addGold = function(amount) {
     this.gold = (this.gold || 0) + amount;
     if (this.gold < 0) this.gold = 0;
 };
+
 playerSchema.methods.removeGold = function(amount) {
     if (this.gold >= amount) {
         this.gold -= amount;
@@ -306,12 +294,14 @@ playerSchema.methods.removeGold = function(amount) {
     }
     return false;
 };
+
 playerSchema.methods.addItem = function(id, name, type, quantity = 1) {
     if (!this.inventory) this.inventory = [];
     const existing = this.inventory.find(i => i.id === id);
     if (existing) existing.quantity += quantity;
     else this.inventory.push({ id, name, type, quantity });
 };
+
 playerSchema.methods.removeItem = function(id, quantity = 1) {
     if (!this.inventory) return false;
     const idx = this.inventory.findIndex(i => i.id === id);
@@ -322,11 +312,13 @@ playerSchema.methods.removeItem = function(id, quantity = 1) {
     }
     return false;
 };
+
 playerSchema.methods.getItemQuantity = function(id) {
     if (!this.inventory) return 0;
     const item = this.inventory.find(i => i.id === id);
     return item ? item.quantity : 0;
 };
+
 playerSchema.methods.addExperience = function(amount) {
     this.experience = (this.experience || 0) + amount;
     const required = (this.level || 1) * 100;
@@ -336,6 +328,7 @@ playerSchema.methods.addExperience = function(amount) {
     }
     return false;
 };
+
 playerSchema.methods.levelUp = function() {
     this.level = (this.level || 1) + 1;
     this.experience = 0;
@@ -344,13 +337,16 @@ playerSchema.methods.levelUp = function() {
     this.skills.gathering += 0.1;
     this.skills.crafting += 0.1;
 };
+
 playerSchema.methods.heal = function(amount) {
     this.health = Math.min((this.health || 0) + amount, this.maxHealth);
 };
+
 playerSchema.methods.takeDamage = function(amount) {
     this.health = Math.max(0, (this.health || 0) - amount);
     return this.health > 0;
 };
+
 playerSchema.methods.respawn = function() {
     this.health = this.maxHealth || 100;
     this.mana = this.maxMana || 50;
@@ -360,12 +356,14 @@ playerSchema.methods.respawn = function() {
     this.gold = Math.max(0, this.gold - goldLoss);
     return goldLoss;
 };
+
 playerSchema.methods.setCooldown = function(action, minutes = 1) {
     if (!this.cooldowns) this.cooldowns = {};
     const t = new Date();
     t.setMinutes(t.getMinutes() + minutes);
     this.cooldowns[action] = t;
 };
+
 playerSchema.methods.getEquippedItemStats = function(itemsData) {
     const stats = { damage: 0, defense: 0, maxHealth: 0, maxMana: 0, maxStamina: 0, critChance: 0, healthRegen: 0 };
     if (!itemsData) return stats;
@@ -384,6 +382,7 @@ playerSchema.methods.getEquippedItemStats = function(itemsData) {
     }
     return stats;
 };
+
 playerSchema.methods.recalculateMaxStats = function(equipped) {
     const bonus = this.bonusStats || {};
     this.maxHealth = 100 + ((this.level || 1) - 1) * 20 + (equipped.maxHealth || 0) + (bonus.maxHealth || 0);
@@ -393,6 +392,7 @@ playerSchema.methods.recalculateMaxStats = function(equipped) {
     this.mana = Math.min(this.mana, this.maxMana);
     this.stamina = Math.min(this.stamina, this.maxStamina);
 };
+
 playerSchema.methods.getTotalStats = function(itemsData) {
     const bonus = this.bonusStats || {};
     const eq = this.getEquippedItemStats(itemsData);
@@ -406,16 +406,19 @@ playerSchema.methods.getTotalStats = function(itemsData) {
         healthRegen: 1 + (eq.healthRegen || 0)
     };
 };
+
 playerSchema.methods.getAttackDamage = function(itemsData) {
     if (!itemsData) return 10;
     const t = this.getTotalStats(itemsData);
     return Math.floor(t.damage * ((this.skills && this.skills.combat) || 1));
 };
+
 playerSchema.methods.getDefense = function(itemsData) {
     if (!itemsData) return 5;
     const t = this.getTotalStats(itemsData);
     return Math.floor(t.defense * ((this.skills && this.skills.combat) || 1));
 };
+
 playerSchema.methods.equipItem = function(itemId, itemType, itemsData) {
     if (this.getItemQuantity(itemId) === 0) {
         return { error: `❌ لا تملك هذا العنصر.` };
@@ -427,6 +430,7 @@ playerSchema.methods.equipItem = function(itemId, itemType, itemsData) {
     this.recalculateMaxStats(this.getEquippedItemStats(itemsData));
     return { success: true, oldItemId: old };
 };
+
 playerSchema.methods.unequipItem = function(slot, itemsData) {
     if (!['weapon', 'armor', 'accessory', 'tool'].includes(slot)) {
         return { error: '❌ خانة غير صالحة.' };
@@ -439,12 +443,11 @@ playerSchema.methods.unequipItem = function(slot, itemsData) {
 };
 
 // ===================================
-// Pre-save hook
+// Pre-save
 // ===================================
-
 playerSchema.pre('save', function(next) {
     this.updatedAt = Date.now();
-    this.recalculateMaxStats(this.getEquippedItemStats(global.itemsData));
+    this.recalculateMaxStats(this.getEquippedItemStats(DataLoader.getItems()));
     next();
 });
 
@@ -452,12 +455,8 @@ playerSchema.pre('save', function(next) {
 // Statics
 // ===================================
 
-// ✅ الحصول على آخر playerId (P1100+)
 playerSchema.statics.getLastPlayerNumericId = async function() {
-    const last = await this.findOne({
-        playerId: { $regex: /^P\d+$/ }
-    }).sort({ playerId: -1 }).exec();
-
+    const last = await this.findOne({ playerId: { $regex: /^P\d+$/ } }).sort({ playerId: -1 }).exec();
     if (last?.playerId) {
         const id = parseInt(last.playerId.substring(1), 10);
         if (!isNaN(id) && id >= 1100) return id;
@@ -465,12 +464,8 @@ playerSchema.statics.getLastPlayerNumericId = async function() {
     return 1099;
 };
 
-// ✅ الحصول على آخر adminId (1000-1099)
 playerSchema.statics.getLastAdminNumericId = async function() {
-    const last = await this.findOne({
-        playerId: { $regex: /^\d+$/ }
-    }).sort({ playerId: -1 }).exec();
-
+    const last = await this.findOne({ playerId: { $regex: /^\d+$/ } }).sort({ playerId: -1 }).exec();
     if (last?.playerId) {
         const id = parseInt(last.playerId, 10);
         if (!isNaN(id) && id >= 1000) return id;
@@ -478,19 +473,16 @@ playerSchema.statics.getLastAdminNumericId = async function() {
     return 999;
 };
 
-// ✅ البحث بـ username
 playerSchema.statics.findByUsername = async function(username) {
     if (!username) return null;
     return await this.findOne({ username: username.toLowerCase().trim() });
 };
 
-// ✅ البحث بـ platformId (من أي منصة)
 playerSchema.statics.findByPlatform = async function(platformId) {
     if (!platformId) return null;
     return await this.findOne({ 'linkedPlatforms.platformId': platformId });
 };
 
-// ✅ البحث بـ playerId أو username
 playerSchema.statics.findByIdentifier = async function(identifier) {
     if (!identifier) return null;
     const clean = identifier.trim();
@@ -510,7 +502,6 @@ playerSchema.statics.findByIdentifier = async function(identifier) {
     return null;
 };
 
-// ✅ إنشاء حساب جديد
 playerSchema.statics.createAccount = async function(username, passwordHash, gender, platform, platformId, displayName) {
     const lastId = await this.getLastPlayerNumericId();
     const newPlayerId = `P${lastId + 1}`;
@@ -521,7 +512,7 @@ playerSchema.statics.createAccount = async function(username, passwordHash, gend
         username: username.toLowerCase(),
         passwordHash,
         gender,
-        name: username,  // للعرض
+        name: username,
         playerId: newPlayerId,
         registrationStatus: 'completed',
         linkedPlatforms: [{

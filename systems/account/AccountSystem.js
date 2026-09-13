@@ -7,13 +7,13 @@ export class AccountSystem {
     constructor() {
         // ✅ جلسات التسجيل المؤقتة (قبل إنشاء الحساب)
         this.registrationSessions = new Map(); // platformId => { step, data, startedAt }
-        
+
         // ✅ جلسات تسجيل الدخول
         this.loginSessions = new Map(); // platformId => { step, username, startedAt }
-        
+
         // ✅ محاولات الدخول الفاشلة
         this.loginAttempts = new Map(); // platformId => { count, lockedUntil }
-        
+
         // ✅ إعدادات
         this.USERNAME_MIN = 3;
         this.USERNAME_MAX = 9;
@@ -21,45 +21,39 @@ export class AccountSystem {
         this.MAX_LOGIN_ATTEMPTS = 3;
         this.LOCK_DURATION_MINUTES = 5;
         this.SESSION_TIMEOUT_MINUTES = 10;
-        
-        console.log('👤 نظام الحسابات تم تهيئته');
+
+        console.log('👤 نظام الحسابات تم تهيئته (كلمات فقط - بدون أرقام)');
     }
 
     // ===================================
     // فحص الحساب والجلسات
     // ===================================
 
-    // ✅ هل المستخدم لديه حساب مربوط بهذه المنصة؟
     async hasAccount(platformId) {
         const player = await Player.findByPlatform(platformId);
         if (!player) return false;
         return player.hasActiveSession(platformId);
     }
 
-    // ✅ هل المستخدم مرتبط (لكن مسجل خروج)؟
     async isLinkedButLoggedOut(platformId) {
         const player = await Player.findByPlatform(platformId);
         if (!player) return false;
         return !player.hasActiveSession(platformId);
     }
 
-    // ✅ فحص وجود جلسة تسجيل
     hasRegistrationSession(platformId) {
         return this.registrationSessions.has(platformId);
     }
 
-    // ✅ فحص وجود جلسة دخول
     hasLoginSession(platformId) {
         return this.loginSessions.has(platformId);
     }
 
-    // ✅ إلغاء كل الجلسات للمستخدم
     cancelAllSessions(platformId) {
         this.registrationSessions.delete(platformId);
         this.loginSessions.delete(platformId);
     }
 
-    // ✅ تنظيف الجلسات القديمة
     cleanupOldSessions() {
         const now = Date.now();
         const timeout = this.SESSION_TIMEOUT_MINUTES * 60 * 1000;
@@ -78,31 +72,34 @@ export class AccountSystem {
     }
 
     // ===================================
-    // عرض قائمة البداية
+    // رسالة الترحيب (كلمات فقط - بدون أرقام)
     // ===================================
-
-    getWelcomeMessage(platform) {
+    getWelcomeMessage(platform = 'facebook') {
         const platformName = platform === 'telegram' ? 'تلغرام' : 'فيسبوك';
-        
+
         return `🎮 مرحباً بك في مغارة ريو!
 
 👤 ليس لديك حساب بعد على ${platformName}.
 
-📋 اختر:
+📋 اختر أحد الخيارين:
 
-1️⃣ لدي حساب (تسجيل دخول)
-2️⃣ إنشاء حساب جديد
+🔹 لدي حساب بالفعل → اكتب:
+   • "دخول"
+   • "تسجيل دخول"
+   • "لدي حساب"
 
-💡 اكتب الرقم أو الكلمة:
-• "1" أو "دخول" أو "تسجيل دخول"
-• "2" أو "انشاء" أو "تسجيل"`;
+🔹 إنشاء حساب جديد → اكتب:
+   • "انشاء"
+   • "تسجيل"
+   • "حساب جديد"
+
+💡 اكتب الكلمة المناسبة الآن.`;
     }
 
     // ===================================
     // تدفق الإنشاء
     // ===================================
 
-    // ✅ بدء الإنشاء
     async startRegistration(platformId, platform, displayName) {
         this.registrationSessions.set(platformId, {
             step: 'username',
@@ -120,7 +117,7 @@ export class AccountSystem {
             success: true,
             message: `📝 إنشاء حساب جديد
 
-الخطوة 1/3: اسم المستخدم
+🔹 الخطوة 1 من 3: اسم المستخدم
 
 📋 الشروط:
 • من 3 إلى 9 أحرف إنجليزية
@@ -133,7 +130,6 @@ export class AccountSystem {
         };
     }
 
-    // ✅ معالجة خطوات الإنشاء
     async handleRegistrationStep(platformId, message) {
         const session = this.registrationSessions.get(platformId);
         if (!session) {
@@ -143,7 +139,7 @@ export class AccountSystem {
         const text = message.trim();
         const lower = text.toLowerCase();
 
-        // إلغاء
+        // إلغاء في أي خطوة
         if (lower === 'الغاء' || lower === 'إلغاء' || lower === 'cancel') {
             this.registrationSessions.delete(platformId);
             return {
@@ -154,10 +150,9 @@ export class AccountSystem {
 
         // ✅ Step 1: Username
         if (session.step === 'username') {
-            // فحص الشروط
             if (text.length < this.USERNAME_MIN || text.length > this.USERNAME_MAX) {
                 return {
-                    error: `❌ الاسم يجب أن يكون بين ${this.USERNAME_MIN} و ${this.USERNAME_MAX} أحرف.\n\n💡 جرب مرة أخرى:` 
+                    error: `❌ الاسم يجب أن يكون بين ${this.USERNAME_MIN} و ${this.USERNAME_MAX} أحرف.\n\n💡 جرب مرة أخرى:`
                 };
             }
 
@@ -167,7 +162,6 @@ export class AccountSystem {
                 };
             }
 
-            // فحص التوفر
             const existing = await Player.findByUsername(text);
             if (existing) {
                 return {
@@ -175,7 +169,6 @@ export class AccountSystem {
                 };
             }
 
-            // حفظ
             session.data.username = text;
             session.step = 'gender';
             session.startedAt = Date.now();
@@ -184,7 +177,7 @@ export class AccountSystem {
                 success: true,
                 message: `✅ الاسم متاح: ${text}
 
-الخطوة 2/3: الجنس
+🔹 الخطوة 2 من 3: الجنس
 
 📋 اختر جنس شخصيتك:
 • اكتب "ذكر" 👦
@@ -199,9 +192,9 @@ export class AccountSystem {
         // ✅ Step 2: Gender
         if (session.step === 'gender') {
             let gender = null;
-            if (lower === 'ذكر' || lower === 'male' || lower === 'رجل' || lower === 'ولد') {
+            if (['ذكر', 'male', 'رجل', 'ولد'].includes(lower)) {
                 gender = 'male';
-            } else if (lower === 'انثى' || lower === 'أنثى' || lower === 'female' || lower === 'بنت' || lower === 'فتاة') {
+            } else if (['انثى', 'أنثى', 'female', 'بنت', 'فتاة'].includes(lower)) {
                 gender = 'female';
             } else {
                 return {
@@ -217,7 +210,7 @@ export class AccountSystem {
                 success: true,
                 message: `✅ الجنس: ${gender === 'male' ? 'ذكر 👦' : 'أنثى 👧'}
 
-الخطوة 3/3: كلمة السر
+🔹 الخطوة 3 من 3: كلمة السر
 
 📋 الشروط:
 • 4 أحرف على الأقل
@@ -260,19 +253,20 @@ export class AccountSystem {
 
 ⚠️ هل أنت متأكد من صحة البيانات؟
 
-• اكتب "تأكيد" أو "1" → إنشاء الحساب
+• اكتب "تأكيد" أو "موافق" أو "نعم" → إنشاء الحساب
 • اكتب "الغاء" → إلغاء التسجيل
 • اكتب "رجوع" → إعادة إدخال كلمة السر`
             };
         }
 
-        // ✅ Step 4: Confirmation
+        // ✅ Step 4: Confirmation (كلمات فقط - بدون "1")
         if (session.step === 'confirmation') {
-            if (lower === 'تأكيد' || lower === '1' || lower === 'موافق' || lower === 'نعم' || lower === 'confirm') {
+            const confirmWords = ['تأكيد', 'موافق', 'نعم', 'confirm', 'yes', 'ok', 'تمام'];
+            if (confirmWords.includes(lower)) {
                 return await this._createAccount(platformId, session);
             }
 
-            if (lower === 'رجوع') {
+            if (lower === 'رجوع' || lower === 'back') {
                 session.step = 'password';
                 session.startedAt = Date.now();
                 return {
@@ -282,7 +276,7 @@ export class AccountSystem {
             }
 
             return {
-                error: '❌ اكتب "تأكيد" أو "الغاء".'
+                error: '❌ اكتب "تأكيد" أو "موافق" أو "نعم"، أو "الغاء" أو "رجوع".'
             };
         }
 
@@ -294,10 +288,8 @@ export class AccountSystem {
         try {
             const data = session.data;
 
-            // تشفير كلمة السر
             const passwordHash = await bcrypt.hash(data.password, 10);
 
-            // إنشاء الحساب
             const player = await Player.createAccount(
                 data.username,
                 passwordHash,
@@ -307,10 +299,8 @@ export class AccountSystem {
                 data.displayName
             );
 
-            // حذف الجلسة
             this.registrationSessions.delete(platformId);
 
-            // إنشاء رمز إحالة
             const code = this._generateReferralCode(player.playerId);
             player.referralCode = code;
             await player.save();
@@ -320,14 +310,14 @@ export class AccountSystem {
                 player,
                 message: `🎉 تم إنشاء حسابك بنجاح!
 
-📋 **معلومات حسابك:**
+📋 معلومات حسابك:
 
 👤 اسم المستخدم: ${data.username}
 ⚧️ الجنس: ${data.gender === 'male' ? 'ذكر 👦' : 'أنثى 👧'}
 🔐 كلمة السر: ${data.password}
 🆔 معرف اللاعب: ${player.playerId}
 
-⚠️ **احفظ هذه المعلومات جيداً!**
+⚠️ احفظ هذه المعلومات جيداً!
 ستحتاجها لتسجيل الدخول من أي منصة.
 لا يمكن استرجاع كلمة السر إذا فقدتها.
 
@@ -351,7 +341,6 @@ export class AccountSystem {
     // تدفق تسجيل الدخول
     // ===================================
 
-    // ✅ بدء تسجيل الدخول
     async startLogin(platformId, platform, displayName) {
         this.loginSessions.set(platformId, {
             step: 'username',
@@ -373,7 +362,6 @@ export class AccountSystem {
         };
     }
 
-    // ✅ معالجة خطوات الدخول
     async handleLoginStep(platformId, message) {
         const session = this.loginSessions.get(platformId);
         if (!session) {
@@ -420,7 +408,6 @@ export class AccountSystem {
 
         // ✅ Step 2: Password
         if (session.step === 'password') {
-            // فحص القفل
             const attempts = this.loginAttempts.get(platformId);
             if (attempts?.lockedUntil && Date.now() < attempts.lockedUntil) {
                 const remaining = Math.ceil((attempts.lockedUntil - Date.now()) / 1000 / 60);
@@ -435,11 +422,9 @@ export class AccountSystem {
                 return { error: '❌ حدث خطأ. جرب مرة أخرى.' };
             }
 
-            // فحص كلمة السر
             const isValid = await bcrypt.compare(text, player.passwordHash);
 
             if (!isValid) {
-                // زيادة المحاولات
                 const currentAttempts = this.loginAttempts.get(platformId) || { count: 0 };
                 currentAttempts.count += 1;
                 currentAttempts.lastAttempt = Date.now();
@@ -447,7 +432,7 @@ export class AccountSystem {
                 if (currentAttempts.count >= this.MAX_LOGIN_ATTEMPTS) {
                     currentAttempts.lockedUntil = Date.now() + this.LOCK_DURATION_MINUTES * 60 * 1000;
                     this.loginAttempts.set(platformId, currentAttempts);
-                    
+
                     return {
                         error: `❌ كلمة السر خاطئة!\n\n🔒 تم حظرك من تسجيل الدخول لمدة ${this.LOCK_DURATION_MINUTES} دقائق.`
                     };
@@ -465,7 +450,6 @@ export class AccountSystem {
             this.loginAttempts.delete(platformId);
             this.loginSessions.delete(platformId);
 
-            // ربط المنصة
             const linkResult = player.linkPlatform(
                 session.platform,
                 platformId,
@@ -476,7 +460,6 @@ export class AccountSystem {
                 return { error: linkResult.error };
             }
 
-            // إزالة من قائمة الخروج
             player.loggedOutPlatforms = (player.loggedOutPlatforms || [])
                 .filter(p => p !== platformId);
 
@@ -537,13 +520,12 @@ export class AccountSystem {
         return `MG${numericPart}${randomLetters}`;
     }
 
-    // ✅ فحص إذا كان النص يبدأ بأمر
     isAccountCommand(text) {
         const lower = text.toLowerCase().trim();
         const commands = [
-            'بدء', 'ابدأ', 'ابدء',
-            'دخول', 'تسجيل دخول', 'تسجيل_دخول', 'تسجيلالدخول', 'لدي حساب', 'لدي_حساب',
-            'انشاء', 'إنشاء', 'تسجيل', 'حساب جديد', 'حساب_جديد',
+            'بدء', 'ابدأ', 'ابدء', 'ابد',
+            'دخول', 'تسجيل دخول', 'تسجيل_دخول', 'تسجيلالدخول', 'لدي حساب', 'لدي_حساب', 'لديحساب',
+            'انشاء', 'إنشاء', 'تسجيل', 'حساب جديد', 'حساب_جديد', 'حسابجديد',
             'الغاء', 'إلغاء', 'cancel',
             'تسجيل خروج', 'تسجيل_خروج', 'تسجيلخروج', 'خروج', 'logout',
             'معرفي', 'حسابي'
@@ -551,10 +533,9 @@ export class AccountSystem {
         return commands.some(cmd => lower === cmd || lower.startsWith(cmd));
     }
 
-    // ✅ تنظيف دوري
     startCleanupInterval() {
         setInterval(() => {
             this.cleanupOldSessions();
-        }, 5 * 60 * 1000); // كل 5 دقائق
+        }, 5 * 60 * 1000);
     }
-            }
+                }

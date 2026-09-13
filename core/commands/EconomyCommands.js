@@ -5,7 +5,7 @@ import { BaseCommand } from './BaseCommand.js';
 export class EconomyCommands extends BaseCommand {
     getCommands() {
         return {
-            // ✅ الرصيد
+            // ====== الرصيد ======
             'رصيد': this.handleBalance.bind(this),
             'رصيدي': this.handleBalance.bind(this),
             'بطاقة': this.handleCard.bind(this),
@@ -13,24 +13,26 @@ export class EconomyCommands extends BaseCommand {
             'معاملاتي': this.handleTransactions.bind(this),
             'سجلي': this.handleTransactions.bind(this),
 
-            // ✅ المتجر
+            // ====== المتجر ======
             'متجر': this.handleShop.bind(this),
             'المتجر': this.handleShop.bind(this),
+            'منتجات': this.handleShop.bind(this),
+            'منتج': this.handleProductInfo.bind(this),
             'شراء': this.handlePurchase.bind(this),
             'اشتري': this.handlePurchase.bind(this),
-            'منتج': this.handleProductInfo.bind(this),
+            'اشتر': this.handlePurchase.bind(this),
 
-            // ✅ التحويل
+            // ====== التحويل ======
             'تحويل': this.handleTransfer.bind(this),
             'حول': this.handleTransfer.bind(this),
 
-            // ✅ الأكواد
+            // ====== الأكواد ======
             'هدية': this.handleGiftCode.bind(this),
             'كود': this.handleGiftCode.bind(this),
             'خصم': this.handleDiscountCode.bind(this),
             'كوبون': this.handleDiscountCode.bind(this),
 
-            // ✅ أوامر الأدمن الاقتصادية
+            // ====== أوامر الأدمن الاقتصادية ======
             'اضف_رصيد': this.handleAddBalance.bind(this),
             'اسحب_رصيد': this.handleRemoveBalance.bind(this),
             'تعديل_رصيد': this.handleSetBalance.bind(this),
@@ -69,19 +71,14 @@ export class EconomyCommands extends BaseCommand {
 
         return `💰 رصيدك في سوق ريو
 
+👤 ${player.username || player.name}
+🆔 ${player.playerId || 'N/A'}
 💎 الرصيد: ${player.gold} ريو
-📊 المستوى: ${player.level}
-🆔 ID: ${player.playerId}
 
-💡 أوامر السوق:
-• متجر - عرض المنتجات
-• شراء [ID] - شراء منتج
-• تحويل [الاسم] [المبلغ]
-• هدية [الكود]
-• خصم [الكود]
-• بطاقة - بطاقة رصيدك
+🎮 اجمع المزيد من الريو في مغارة ريو:
+${gameUrl}
 
-🎮 للعب: ${gameUrl}`;
+💡 استخدم "متجر" لرؤية المنتجات`;
     }
 
     async handleCard(player) {
@@ -91,11 +88,12 @@ export class EconomyCommands extends BaseCommand {
         try {
             const cardGen = this.commandHandler.cardGenerator;
             if (!cardGen) return '❌ نظام البطاقة غير متوفر.';
+            
             const path = await cardGen.generateCard(player);
             return {
                 type: 'image',
                 path,
-                caption: `💳 بطاقة رصيدك يا ${player.username}`
+                caption: `💳 بطاقة رصيدك يا ${player.username || player.name}`
             };
         } catch (error) {
             return this.handleError(error, 'إنشاء البطاقة');
@@ -144,24 +142,80 @@ export class EconomyCommands extends BaseCommand {
         const check = await this.checkPlayerStatus(player);
         if (check.error) return check.error;
 
-        if (args.length === 0) return '❌ اكتب ID المنتج. مثال: منتج fire_sword';
+        if (args.length === 0) {
+            return `❌ اكتب اسم المنتج أو ID
+
+مثال:
+• منتج تصميم
+• منتج fire_sword
+
+💡 للعرض الكامل: متجر`;
+        }
 
         const shopSystem = await this.getSystem('shop');
         if (!shopSystem) return '❌ نظام المتجر غير متوفر.';
 
-        return await shopSystem.showProduct(args[0]);
+        return await shopSystem.showProduct(args.join(' '));
     }
 
     async handlePurchase(player, args) {
         const check = await this.checkPlayerStatus(player);
         if (check.error) return check.error;
 
-        if (args.length === 0) return '❌ اكتب ID المنتج. مثال: شراء fire_sword';
+        if (args.length === 0) {
+            return `❌ اكتب اسم المنتج
+
+مثال:
+• شراء تصميم
+• شراء fire_sword
+• شراء تصميم 3 (لشراء 3)
+
+💡 للعرض: متجر`;
+        }
+
+        let quantity = 1;
+        let productQuery = args.join(' ');
+
+        // ✅ فحص إذا كان آخر جزء رقم = كمية
+        const lastArg = args[args.length - 1];
+        if (!isNaN(lastArg) && args.length > 1) {
+            quantity = parseInt(lastArg);
+            productQuery = args.slice(0, -1).join(' ');
+            
+            if (quantity <= 0 || quantity > 100) {
+                return '❌ الكمية يجب أن تكون بين 1 و 100.';
+            }
+        }
 
         const shopSystem = await this.getSystem('shop');
         if (!shopSystem) return '❌ نظام المتجر غير متوفر.';
 
-        const result = await shopSystem.purchase(player, args[0]);
+        // ✅ إذا كانت الكمية غير محددة، اسأل اللاعب
+        if (args.length === 1 && quantity === 1) {
+            // فحص وجود منتج
+            const product = await shopSystem._findProduct(productQuery);
+            
+            if (!product) {
+                return `❌ لم يتم العثور على المنتج: "${productQuery}"\n\n💡 للعرض: متجر`;
+            }
+
+            // إذا كان المنتج من نوع "game_item" أو "external" وليس حدث/اشتراك
+            if (product.type === 'game_item' || product.type === 'external') {
+                return `🛒 ${product.name}
+
+💰 السعر: ${product.price} ريو
+📦 المتاح: ${product.stock === null ? '♾️' : product.stock}
+
+❓ كم تريد أن تشتري؟
+
+💡 اكتب:
+• شراء ${product.name} 1
+• شراء ${product.name} 2
+• ...الخ`;
+            }
+        }
+
+        const result = await shopSystem.purchase(player, productQuery, quantity);
         return result.error || result.message;
     }
 
@@ -172,7 +226,13 @@ export class EconomyCommands extends BaseCommand {
         const check = await this.checkPlayerStatus(player);
         if (check.error) return check.error;
 
-        if (args.length < 2) return '❌ الاستخدام: تحويل [الاسم] [المبلغ]';
+        if (args.length < 2) {
+            return `❌ الاستخدام: تحويل [الاسم] [المبلغ]
+
+مثال:
+• تحويل Ahmed 500
+• تحويل Sara 1000`;
+        }
 
         const amount = parseInt(args[args.length - 1]);
         const targetName = args.slice(0, -1).join(' ');
@@ -317,7 +377,15 @@ export class EconomyCommands extends BaseCommand {
 
     async handleAddProduct(player, args) {
         if (!await this.isAdmin(player)) return '❌ هذا الأمر للمدراء فقط.';
-        if (args.length < 4) return `❌ الاستخدام: اضف_منتج [ID] [الاسم] [السعر] [النوع]\n\nالأنواع: لعبة / خارجي`;
+        if (args.length < 4) {
+            return `❌ الاستخدام: اضف_منتج [ID] [الاسم] [السعر] [النوع]
+
+📝 الأنواع:
+• لعبة - منتج لعبة
+• خارجي - منتج خارجي
+• بطاقة - بطاقة حدث
+• اشتراك - اشتراك`;
+        }
 
         const shopSystem = await this.getSystem('shop');
         if (!shopSystem) return '❌ نظام المتجر غير متوفر.';
@@ -329,7 +397,10 @@ export class EconomyCommands extends BaseCommand {
 
         let type = 'game_item';
         if (rawType === 'خارجي' || rawType === 'external') type = 'external';
-        else if (rawType !== 'لعبة' && rawType !== 'game_item') return '❌ النوع: "لعبة" أو "خارجي".';
+        else if (rawType === 'بطاقة' || rawType === 'event') type = 'event_ticket';
+        else if (rawType === 'اشتراك' || rawType === 'subscription') type = 'subscription';
+        else if (rawType === 'لعبة' || rawType === 'game_item') type = 'game_item';
+        else return '❌ النوع غير صالح.';
 
         const productData = {
             id: productId,
@@ -345,9 +416,15 @@ export class EconomyCommands extends BaseCommand {
         if (type === 'game_item') {
             productData.gameItemId = args[4] || productId;
             productData.gameItemQuantity = parseInt(args[5]) || 1;
-        } else {
+        } else if (type === 'external') {
             productData.deliveryMessage = args[4] || 'راسل الإدارة للتسليم';
             productData.deliveryLink = args[5] || process.env.ADMIN_PROFILE_URL || '';
+        } else if (type === 'event_ticket') {
+            productData.ticketEventName = args[4] || name;
+        } else if (type === 'subscription') {
+            productData.subName = args[4] || name;
+            productData.subPrice = price;
+            productData.subInterval = args[5] || 'monthly';
         }
 
         return await shopSystem.addProduct(productData, player.userId);
@@ -355,12 +432,12 @@ export class EconomyCommands extends BaseCommand {
 
     async handleRemoveProduct(player, args) {
         if (!await this.isAdmin(player)) return '❌ هذا الأمر للمدراء فقط.';
-        if (args.length === 0) return '❌ الاستخدام: حذف_منتج [ID]';
+        if (args.length === 0) return '❌ الاستخدام: حذف_منتج [ID أو الاسم]';
 
         const shopSystem = await this.getSystem('shop');
         if (!shopSystem) return '❌ نظام المتجر غير متوفر.';
 
-        return await shopSystem.removeProduct(args[0]);
+        return await shopSystem.removeProduct(args.join(' '));
     }
 
     async handleEditProduct(player, args) {
@@ -384,12 +461,15 @@ export class EconomyCommands extends BaseCommand {
 
     async handleAddStock(player, args) {
         if (!await this.isAdmin(player)) return '❌ هذا الأمر للمدراء فقط.';
-        if (args.length < 2) return '❌ الاستخدام: اضف_مخزون [ID] [الكمية]';
+        if (args.length < 2) return '❌ الاستخدام: اضف_مخزون [ID أو الاسم] [الكمية]';
 
         const shopSystem = await this.getSystem('shop');
         if (!shopSystem) return '❌ نظام المتجر غير متوفر.';
 
-        return await shopSystem.addStock(args[0], parseInt(args[1]));
+        const quantity = parseInt(args[args.length - 1]);
+        const productQuery = args.slice(0, -1).join(' ');
+
+        return await shopSystem.addStock(productQuery, quantity);
     }
 
     async handleAddGiftCode(player, args) {
@@ -596,4 +676,4 @@ export class EconomyCommands extends BaseCommand {
 
         return `✅ تم تعديل الإعداد\n⚙️ ${key} = ${value}`;
     }
-}
+    }

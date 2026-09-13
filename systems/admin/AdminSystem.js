@@ -1,5 +1,5 @@
 // systems/admin/AdminSystem.js
-// الموقع: مغارة ريو
+// الموقع: سوق ريو
 import Player from '../../core/models/Player.js';
 import BannedPlayer from '../../core/models/BannedPlayer.js';
 import { items } from '../../data/items.js';
@@ -12,39 +12,37 @@ export class AdminSystem {
         this.autoResponseSystem = new AutoResponseSystem();
         this.permissionSystem = new PermissionSystem();
         this.commandHandler = null;
-        console.log('👑 نظام المدير (DB-based) تم تهيئته');
+        console.log('👑 نظام المدير (سوق - DB-based) تم تهيئته');
     }
 
     setCommandHandler(handler) {
         this.commandHandler = handler;
     }
 
-    // ✅ جديد: async — يفحص DB
     async isRootAdmin(userId) {
         if (!userId) return false;
-        const rootAdmin = await Player.findOne({ isRoot: true });
-        if (!rootAdmin) return false;
-        return (rootAdmin.linkedPlatforms || []).some(p => p.platformId === userId);
+        try {
+            const rootAdmin = await Player.findOne({ isRoot: true });
+            if (!rootAdmin) return false;
+            return (rootAdmin.linkedPlatforms || []).some(p => p.platformId === userId);
+        } catch (error) {
+            return false;
+        }
     }
 
-    // ✅ جديد: async — root OR DB permissions
     async isAdmin(userId) {
         if (!userId) return false;
-
-        // 1. root admin
         if (await this.isRootAdmin(userId)) return true;
-
-        // 2. أدمن معيَّن
         try {
             const player = await Player.findByPlatform(userId);
             if (!player) return false;
+            if (player.isRoot) return true;
             return player.getActivePermissions().length > 0;
         } catch (error) {
             return false;
         }
     }
 
-    // ✅ alias للتوافق
     async isAdminAsync(userId) {
         return await this.isAdmin(userId);
     }
@@ -83,7 +81,7 @@ export class AdminSystem {
     }
 
     getAdminHelp() {
-    return `👑 أوامر الأدمن - سوق ريو
+        return `👑 أوامر الأدمن - سوق ريو
 
 📢 الإعلان
 • اعلان [النص]
@@ -215,9 +213,6 @@ export class AdminSystem {
         }
     }
 
-    // ===================================
-    // الإعلان
-    // ===================================
     async handleAnnouncement(args, senderId, senderPlayer) {
         const isRoot = senderPlayer && senderPlayer.isRoot;
         const isDBAdmin = senderPlayer && senderPlayer.hasPermission && senderPlayer.hasPermission('full_admin');
@@ -227,10 +222,7 @@ export class AdminSystem {
         }
 
         if (args.length === 0) {
-            return `❌ الاستخدام: اعلان [النص]
-
-📝 مثال:
-اعلان اليوم في مسابقة على الساعة 8 مساءً!`;
+            return `❌ الاستخدام: اعلان [النص]`;
         }
 
         const announcementText = args.join(' ');
@@ -268,10 +260,6 @@ ${announcementText}
             count: allPlayers.length
         };
     }
-
-    // ===================================
-    // باقي الأوامر
-    // ===================================
 
     async handleApprovePlayer(args, senderId) {
         if (args.length === 0) {
@@ -313,7 +301,6 @@ ${announcementText}
 
         const target = await findTargetPlayer(targetId);
         if (!target) return `❌ لم يتم العثور على اللاعب ${targetId}.`;
-
         if (target.isRoot) return '❌ لا يمكن حظر الأدمن الرئيسي!';
 
         const isBanning = banStatusRaw === 'true' || banStatusRaw === 'صحيح' || banStatusRaw === 'حظر';
@@ -343,14 +330,10 @@ ${announcementText}
             const oldId = target.playerId;
             await target.deleteOne();
 
-            return `🚫 تم حظر اللاعب نهائياً
-
-👤 اسم المستخدم: ${oldUsername}
-🆔 ID: ${oldId}`;
+            return `🚫 تم حظر اللاعب نهائياً\n\n👤 اسم المستخدم: ${oldUsername}\n🆔 ID: ${oldId}`;
         } else {
             const bannedRecord = await BannedPlayer.findOne({ userId: target.username });
             if (!bannedRecord) return `❌ اللاعب ${target.username} غير محظور.`;
-
             await BannedPlayer.deleteOne({ userId: target.username });
             return `✅ تم رفع الحظر عن ${bannedRecord.name}`;
         }
@@ -389,7 +372,6 @@ ${announcementText}
             msg += `   📝 ${b.reason}\n\n`;
         });
 
-        msg += `💡 للتنقل: قائمة_المحظورين [رقم]`;
         return msg;
     }
 
@@ -798,4 +780,4 @@ ${announcementText}
     findAutoResponse(message) {
         return this.autoResponseSystem.findAutoResponse(message);
     }
-}
+    }

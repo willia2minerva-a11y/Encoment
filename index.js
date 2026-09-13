@@ -1,5 +1,6 @@
 // index.js
 // الموقع: سوق ريو (الاقتصاد)
+import { DataLoader } from './systems/data/DataLoader.js';
 import mongoose from 'mongoose';
 import 'dotenv/config';
 import express from 'express';
@@ -76,6 +77,7 @@ async function sendImageMessage(senderId, imagePath, caption = '') {
       formData,
       { params: { access_token: PAGE_ACCESS_TOKEN }, headers: { ...formData.getHeaders() } }
     );
+
     console.log(`✅ صورة إلى ${senderId}`);
   } catch (error) {
     console.error('❌ خطأ في إرسال الصورة:', error.response?.data || error.message);
@@ -115,7 +117,7 @@ async function handleAnnouncement(response, senderId) {
     }
   }
 
-  console.log(`✅ الإرسال: ${successCount} نجح، ${failCount} فشل`);
+  console.log(`✅ تم الإرسال: ${successCount} نجح، ${failCount} فشل`);
 
   await sendTextMessage(
     senderId,
@@ -203,6 +205,9 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
+// ===================================
+// Health Check
+// ===================================
 app.get('/', (req, res) => {
   res.status(200).json({
     status: '✅ يعمل',
@@ -230,16 +235,23 @@ async function main() {
   console.log('🚀 بدء تشغيل سوق ريو - Souq Rio...');
 
   try {
+    // ✅ 1. الاتصال بقاعدة البيانات
     await connectDatabase();
 
+    // ✅ 2. تحميل البيانات من MongoDB
+    await DataLoader.initialize();
+
+    // ✅ 3. CommandHandler
     commandHandler = new CommandHandler();
     console.log('✅ تم تهيئة CommandHandler');
 
+    // ✅ 4. بوت تلغرام
     if (process.env.TELEGRAM_BOT_TOKEN) {
       const telegramModule = await import('./telegramBot.js');
       telegramBotInstance = telegramModule.default;
     }
 
+    // ✅ 5. الخادم
     app.listen(PORT, () => {
       console.log(`✅ يعمل على المنفذ ${PORT}`);
       console.log('📱 جاهز لاستقبال الرسائل');

@@ -1,6 +1,6 @@
 // systems/admin/AdminSystem.js
-// الموقع: مشترك - يُنسخ في مغارة ريو + سوق ريو
-import Player from '../../core/models/Player.js';   // ✅
+// الموقع: سوق ريو
+import Player from '../../core/models/Player.js';
 import BannedPlayer from '../../core/models/BannedPlayer.js';
 import { items } from '../../data/items.js';
 import { AutoResponseSystem } from '../autoResponse/AutoResponseSystem.js';
@@ -19,21 +19,25 @@ export class AdminSystem {
         this.commandHandler = handler;
     }
 
+    // ✅ محدّث: يقبل tg_ مع أو بدونه
     isAdmin(userId) {
+        if (!userId) return false;
         const ADMIN_PSID = process.env.ADMIN_PSID;
         const ADMIN_TELEGRAM_ID = process.env.ADMIN_TELEGRAM_ID;
-        const rootAdmins = [
-            ADMIN_PSID,
-            ADMIN_TELEGRAM_ID ? `tg_${ADMIN_TELEGRAM_ID}` : null
-        ].filter(Boolean);
-        return rootAdmins.includes(userId);
+
+        if (ADMIN_PSID && userId === ADMIN_PSID) return true;
+
+        if (ADMIN_TELEGRAM_ID) {
+            if (userId === ADMIN_TELEGRAM_ID) return true;
+            if (userId === `tg_${ADMIN_TELEGRAM_ID}`) return true;
+        }
+
+        return false;
     }
 
     async isAdminAsync(userId) {
-        // الأدمن الرئيسي من ENV
         if (this.isAdmin(userId)) return true;
 
-        // الأدمن المعيَّن (من DB)
         try {
             const player = await Player.findByPlatform(userId);
             if (!player) return false;
@@ -80,9 +84,6 @@ export class AdminSystem {
         return `${Math.floor(ms / (24 * 60 * 60 * 1000))} يوم`;
     }
 
-    // ===================================
-    // الأوامر
-    // ===================================
     getAdminCommands() {
         return {
             'مدير': 'مدير',
@@ -124,47 +125,11 @@ export class AdminSystem {
             'اعطاء_مورد': 'إعطاء مورد',
             'زيادة_صحة': 'زيادة صحة',
             'زيادة_مانا': 'زيادة مانا',
-            // ✅ جديد
             'اعلان': 'إعلان عام'
         };
     }
 
     getAdminHelp() {
-        const isMarket = process.env.BOT_MODE === 'market';
-        
-        if (isMarket) {
-            return `👑 أوامر الأدمن - سوق ريو
-
-📢 الإعلان
-• اعلان [النص] - إرسال إعلان لكل اللاعبين
-
-💰 الرصيد
-• اعطاء_ذهب [ID] [الكمية]
-
-🔐 الصلاحيات
-• اعطاء_ادمن [ID] [مدة]
-• ازالة_ادمن [ID]
-• نزع_ادمن [ID]
-• قائمة_الادمن
-• صلاحيات [ID]
-
-🚫 الحظر
-• حظر_لاعب [ID] [صحيح/خطأ]
-• قائمة_المحظورين [صفحة]
-• حذف_محظور [ID]
-
-🚔 السجن
-• سجن [ID] [المدة]
-• اطلاق [ID]
-• قائمة_المسجونين
-
-📋 العرض
-• عرض_لاعبين [صفحة]
-
-💡 الأوامر تقبل أي شكل:
-موافقة_لاعب | موافقة لاعب | موافقةلاعب`;
-        }
-
         return `👑 أوامر المدير - مغارة ريو
 
 📢 الإعلان
@@ -273,25 +238,10 @@ export class AdminSystem {
         const commandMap = this._getCommandMap();
         const canonicalCommand = commandMap[normalizedCommand] || command;
 
+        // ✅ محدّث: يستخدم Player.findByIdentifier
         const findTargetPlayer = async (id) => {
             if (!id) return null;
-            const cleanId = id.trim();
-
-            // 1. بالاسم
-            let target = await Player.findByUsername(cleanId);
-            if (target) return target;
-
-            // 2. بالـ playerId
-            target = await Player.findOne({ playerId: cleanId });
-            if (target) return target;
-            target = await Player.findOne({ playerId: cleanId.toUpperCase() });
-            if (target) return target;
-
-            // 3. بـ platformId
-            target = await Player.findByPlatform(cleanId);
-            if (target) return target;
-
-            return null;
+            return await Player.findByIdentifier(id);
         };
 
         switch (canonicalCommand) {
@@ -339,13 +289,9 @@ export class AdminSystem {
         }
     }
 
-    // ===================================
-    // 📢 الإعلان
-    // ===================================
+    // ✅ الإعلان
     async handleAnnouncement(args, senderId, senderPlayer) {
-        // فحص صلاحية
         if (!this.isAdmin(senderId)) {
-            // ليس أدمن رئيسي، افحص DB
             const adminPlayer = await Player.findByPlatform(senderId);
             if (!adminPlayer || !adminPlayer.hasPermission('full_admin')) {
                 return '❌ ليس لديك صلاحية الإعلان.';
@@ -367,7 +313,6 @@ export class AdminSystem {
             return '❌ الإعلان طويل جداً (الحد الأقصى 1000 حرف).';
         }
 
-        // الحصول على كل اللاعبين
         const allPlayers = await Player.find({
             'linkedPlatforms.0': { $exists: true },
             banned: { $ne: true }
@@ -377,7 +322,6 @@ export class AdminSystem {
             return '❌ لا يوجد لاعبون لإرسال الإعلان إليهم.';
         }
 
-        // تنسيق الإعلان
         const announcement = `📢 إعلان رسمي
 
 ${announcementText}
@@ -386,13 +330,6 @@ ${announcementText}
 🕐 ${new Date().toLocaleString('ar-EG')}
 👑 الإدارة`;
 
-        // نحتاج نحفظ الإعلان ونُرسل عبر callback
-        // لأن الأدمن لا يمكنه إرسال رسائل مباشرة من هنا
-        
-        // حفظ الإعلان في قائمة إرسال
-        const BannedPlayer = await import('../../core/models/BannedPlayer.js');
-        
-        // إرجاع الأوامر للسوق/اللعبة ليتم تنفيذها بواسطة البوت
         return {
             _announcement: true,
             text: announcement,
@@ -454,7 +391,8 @@ ${announcementText}
         const target = await findTargetPlayer(targetId);
         if (!target) return `❌ لم يتم العثور على اللاعب ${targetId}.`;
 
-        if (this.isRootAdmin(target.username) || this.isRootAdmin(target.userId)) {
+        const targetPlatformIds = (target.linkedPlatforms || []).map(p => p.platformId);
+        if (targetPlatformIds.some(pid => this.isRootAdmin(pid))) {
             return '❌ لا يمكن حظر الأدمن الرئيسي!';
         }
 
@@ -466,7 +404,6 @@ ${announcementText}
                 return `❌ اللاعب ${target.username} محظور بالفعل.`;
             }
 
-            // حفظ في BannedPlayer لكل منصة
             const bannedPlatforms = target.linkedPlatforms || [];
             
             await BannedPlayer.create({
@@ -484,7 +421,6 @@ ${announcementText}
                 linkedPlatformIds: bannedPlatforms.map(p => p.platformId)
             });
 
-            // حذف اللاعب
             const oldUsername = target.username;
             const oldId = target.playerId;
             await target.deleteOne();
@@ -531,11 +467,12 @@ ${announcementText}
         const target = await Player.findByIdentifier(args[0]);
         if (!target) return `❌ لم يتم العثور على اللاعب.`;
 
-        if (this.isRootAdmin(target.username)) {
+        const targetPlatformIds = (target.linkedPlatforms || []).map(p => p.platformId);
+        if (targetPlatformIds.some(pid => this.isRootAdmin(pid))) {
             return '❌ لا يمكن نزع صلاحيات الأدمن الرئيسي!';
         }
 
-        const result = await this.permissionSystem.revokeAllPermissions(target._id);
+        const result = await this.permissionSystem.revokeAllPermissions(args[0]);
         return result.error || result.message;
     }
 
@@ -576,13 +513,11 @@ ${announcementText}
         return `✅ تم حذف ${result.info.name} من قائمة المحظورين.`;
     }
 
-    // ... [باقي الدوال من الرسالة السابقة كما هي]
-
-    // سأضع اختصاراً للباقي لأنها نفس النسخة السابقة
     async handleResetPlayer(args, findTargetPlayer) {
         const target = await findTargetPlayer(args[0]);
         if (!target) return `❌ لم يتم العثور.`;
-        if (this.isRootAdmin(target.username)) return '❌ لا يمكن!';
+        const targetPlatformIds = (target.linkedPlatforms || []).map(p => p.platformId);
+        if (targetPlatformIds.some(pid => this.isRootAdmin(pid))) return '❌ لا يمكن!';
         const oldUsername = target.username;
         await target.deleteOne();
         return `🗑️ تم مسح ${oldUsername}.`;
@@ -849,19 +784,15 @@ ${announcementText}
         return msg;
     }
 
-    // الصلاحيات
     async handleGrantAdmin(args, senderId) {
         const sender = await Player.findByPlatform(senderId);
         const isRoot = this.isRootAdmin(senderId);
         const senderHasFull = sender && sender.hasPermission('full_admin');
         if (!isRoot && !senderHasFull) return '❌ ليس لديك صلاحية.';
         if (args.length < 1) return `❌ الاستخدام: اعطاء_ادمن [ID] [مدة]`;
-        
-        const target = await Player.findByIdentifier(args[0]);
-        if (!target) return `❌ لم يتم العثور.`;
-        
+
         const durationHours = args[1] ? parseInt(args[1]) : null;
-        const result = await this.permissionSystem.grantPermission(target._id, 'full_admin', senderId, durationHours);
+        const result = await this.permissionSystem.grantPermission(args[0], 'full_admin', senderId, durationHours);
         return result.error || result.message;
     }
 
@@ -871,12 +802,9 @@ ${announcementText}
         const senderHasFull = sender && sender.hasPermission('full_admin');
         if (!isRoot && !senderHasFull) return '❌ ليس لديك صلاحية.';
         if (args.length < 2) return '❌ الاستخدام: اعطاء_صلاحية [ID] [النوع] [مدة]';
-        
-        const target = await Player.findByIdentifier(args[0]);
-        if (!target) return `❌ لم يتم العثور.`;
-        
+
         const durationHours = args[2] ? parseInt(args[2]) : null;
-        const result = await this.permissionSystem.grantPermission(target._id, args[1], senderId, durationHours);
+        const result = await this.permissionSystem.grantPermission(args[0], args[1], senderId, durationHours);
         return result.error || result.message;
     }
 
@@ -886,11 +814,8 @@ ${announcementText}
         const senderHasFull = sender && sender.hasPermission('full_admin');
         if (!isRoot && !senderHasFull) return '❌ ليس لديك صلاحية.';
         if (args.length < 2) return '❌ الاستخدام: ازالة_صلاحية [ID] [النوع]';
-        
-        const target = await Player.findByIdentifier(args[0]);
-        if (!target) return `❌ لم يتم العثور.`;
-        
-        const result = await this.permissionSystem.revokePermission(target._id, args[1]);
+
+        const result = await this.permissionSystem.revokePermission(args[0], args[1]);
         return result.error || result.message;
     }
 
@@ -901,13 +826,10 @@ ${announcementText}
 
     async handleShowPermissions(args, senderId) {
         if (args.length < 1) return '❌ الاستخدام: صلاحيات [ID]';
-        const target = await Player.findByIdentifier(args[0]);
-        if (!target) return `❌ لم يتم العثور.`;
-        const result = await this.permissionSystem.showPlayerPermissions(target._id);
+        const result = await this.permissionSystem.showPlayerPermissions(args[0]);
         return result.error || result.message;
     }
 
-    // السجن
     async handleJail(args, senderId) {
         const sender = await Player.findByPlatform(senderId);
         const isRoot = this.isRootAdmin(senderId);
@@ -917,8 +839,10 @@ ${announcementText}
 
         const target = await Player.findByIdentifier(args[0]);
         if (!target) return `❌ لم يتم العثور.`;
-        if (target.hasActiveSession(senderId)) return '❌ لا يمكنك سجن نفسك!';
-        if (this.isRootAdmin(target.username)) return '❌ لا يمكن سجن الأدمن الرئيسي!';
+
+        const targetPlatformIds = (target.linkedPlatforms || []).map(p => p.platformId);
+        if (targetPlatformIds.includes(senderId)) return '❌ لا يمكنك سجن نفسك!';
+        if (targetPlatformIds.some(pid => this.isRootAdmin(pid))) return '❌ لا يمكن سجن الأدمن الرئيسي!';
 
         const durationInput = args[1];
         if (durationInput) {
@@ -988,4 +912,4 @@ ${announcementText}
     findAutoResponse(message) {
         return this.autoResponseSystem.findAutoResponse(message);
     }
-    }
+            }

@@ -1,16 +1,24 @@
 // systems/economy/ShopSystem.js
+// الموقع: سوق ريو
 import ShopItem from '../../core/models/ShopItem.js';
 import DiscountCode from '../../core/models/DiscountCode.js';
 import Player from '../../core/models/Player.js';
 import Settings from '../../core/models/Settings.js';
-import { items as ITEMS_DATA } from '../../data/items.js';
-import { resources as RESOURCES_DATA } from '../../data/resources.js';
+import { DataLoader } from '../data/DataLoader.js';
 
 export class ShopSystem {
     constructor() {
-        this.ITEMS = ITEMS_DATA;
-        this.RESOURCES = RESOURCES_DATA;
+        this.ITEMS = DataLoader.getItems() || {};
+        this.RESOURCES = DataLoader.getResources() || {};
+        this.commandHandler = null;
         console.log('🛒 نظام المتجر تم تهيئته');
+    }
+
+    setCommandHandler(handler) {
+        this.commandHandler = handler;
+        // تحديث البيانات
+        this.ITEMS = DataLoader.getItems() || {};
+        this.RESOURCES = DataLoader.getResources() || {};
     }
 
     // ✅ ترجمة اسم عنصر
@@ -20,19 +28,29 @@ export class ShopSystem {
         return itemId;
     }
 
+    // ===================================
+    // العرض
+    // ===================================
+
     // ✅ عرض المتجر
     async showShop(page = 1) {
         const perPage = await Settings.get('shopPageSize', 10);
-        
+
         const totalItems = await ShopItem.countDocuments({ isActive: true });
-        
+
         if (totalItems === 0) {
-            return `🛒 المتجر\n\n❌ لا توجد منتجات حالياً.`;
+            return `🛒 المتجر
+
+❌ لا توجد منتجات حالياً.
+
+💡 تابع قناة الإعلانات لمعرفة المنتجات الجديدة!`;
         }
 
         const totalPages = Math.ceil(totalItems / perPage);
         if (page < 1 || page > totalPages) {
-            return `❌ الصفحة ${page} غير موجودة. الإجمالي: ${totalPages}`;
+            return `❌ الصفحة ${page} غير موجودة.
+
+📄 إجمالي الصفحات: ${totalPages}`;
         }
 
         const skip = (page - 1) * perPage;
@@ -47,37 +65,49 @@ export class ShopSystem {
         products.forEach((p, index) => {
             const globalIndex = skip + index + 1;
             const stockStr = p.stock === null 
-                ? '♾️' 
-                : p.stock > 0 ? `${p.stock}` : '❌ نفذ';
+                ? '♾️ غير محدود' 
+                : p.stock > 0 ? `${p.stock} متاح` : '❌ نفذ';
             
-            const typeIcon = p.type === 'game_item' ? '🎮' : '🎁';
+            const typeIcon = p.type === 'game_item' ? '🎮' :
+                            p.type === 'external' ? '🎁' :
+                            p.type === 'event_ticket' ? '🎫' :
+                            p.type === 'subscription' ? '📅' : '📦';
             
             msg += `${globalIndex}. ${typeIcon} ${p.name}\n`;
-            msg += `   💰 ${p.price} ريو\n`;
+            msg += `   💰 السعر: ${p.price} ريو\n`;
             msg += `   📦 المخزون: ${stockStr}\n`;
             if (p.description) msg += `   📝 ${p.description}\n`;
-            msg += `   🆔 ID: ${p.id}\n\n`;
+            msg += `\n`;
         });
 
-        msg += `💡 للشراء: شراء [ID المنتج]`;
-        msg += `\n💡 للتنقل: متجر [رقم الصفحة]`;
+        msg += `━━━━━━━━━━━━━━━\n`;
+        msg += `💡 للشراء: شراء [اسم المنتج]\n`;
+        msg += `💡 لتفاصيل منتج: منتج [اسم المنتج]\n`;
+        if (totalPages > 1) {
+            msg += `💡 للتنقل: متجر [رقم الصفحة]\n`;
+        }
 
         return msg;
     }
 
-    // ✅ عرض منتج واحد
-    async showProduct(productId) {
-        const product = await ShopItem.findOne({ id: productId });
+    // ✅ عرض تفاصيل منتج
+    async showProduct(productQuery) {
+        const product = await this._findProduct(productQuery);
 
         if (!product) {
-            return `❌ المنتج غير موجود: ${productId}`;
+            return `❌ لم يتم العثور على المنتج: "${productQuery}"
+
+💡 للعرض: متجر`;
         }
 
         const stockStr = product.stock === null 
             ? '♾️ غير محدود' 
             : product.stock > 0 ? `${product.stock} متاح` : '❌ نفذ';
 
-        const typeStr = product.type === 'game_item' ? '🎮 منتج لعبة' : '🎁 منتج خارجي';
+        const typeStr = product.type === 'game_item' ? '🎮 منتج لعبة' :
+                        product.type === 'external' ? '🎁 منتج خارجي' :
+                        product.type === 'event_ticket' ? '🎫 بطاقة حدث' :
+                        product.type === 'subscription' ? '📅 اشتراك' : '📦 منتج';
 
         let msg = `🛒 ${product.name}\n\n`;
         msg += `📝 ${product.description || 'لا يوجد وصف'}\n\n`;
@@ -86,43 +116,74 @@ export class ShopSystem {
         msg += `🏷️ النوع: ${typeStr}\n`;
         msg += `📊 المبيعات: ${product.totalSold}\n\n`;
         
-        msg += `💡 للشراء: شراء ${product.id}`;
+        msg += `💡 للشراء: شراء ${product.name}`;
 
         return msg;
     }
 
-    // ✅ شراء منتج
-    async purchase(player, productId) {
-        const product = await ShopItem.findOne({ id: productId });
+    // ===================================
+    // البحث عن منتج
+    // ===================================
+    async _findProduct(query) {
+        if (!query) return null;
+        
+        const clean = query.trim();
+
+        // 1. بالـ ID
+        let product = await ShopItem.findOne({ id: clean });
+        if (product) return product;
+
+        // 2. بالاسم (تام)
+        product = await ShopItem.findOne({ 
+            name: { $regex: new RegExp(`^${clean}$`, 'i') } 
+        });
+        if (product) return product;
+
+        // 3. بالاسم (جزئي)
+        product = await ShopItem.findOne({ 
+            name: { $regex: new RegExp(clean, 'i') } 
+        });
+        return product;
+    }
+
+    // ===================================
+    // الشراء
+    // ===================================
+    async purchase(player, productQuery, quantity = 1) {
+        const product = await this._findProduct(productQuery);
 
         if (!product) {
-            return { error: `❌ المنتج غير موجود.` };
+            return { error: `❌ لم يتم العثور على المنتج: "${productQuery}"` };
         }
 
         if (!product.isAvailable()) {
             return { error: `❌ ${product.name} غير متوفر حالياً.` };
         }
 
-        // ✅ فحص الخصم المطبق
-        let finalPrice = product.price;
+        // ✅ فحص المخزون
+        if (product.stock !== null && product.stock < quantity) {
+            return { error: `❌ الكمية المطلوبة غير متوفرة.\n\n📦 المتاح: ${product.stock}` };
+        }
+
+        // ✅ حساب السعر النهائي
+        const totalPrice = product.price * quantity;
+        let finalPrice = totalPrice;
         let discountMsg = '';
         let appliedDiscountCode = null;
 
         if (player.appliedDiscount?.code && player.appliedDiscount.percentage > 0) {
-            // فحص الصلاحية
             if (player.appliedDiscount.expiresAt && player.appliedDiscount.expiresAt < new Date()) {
-                // انتهى
                 player.appliedDiscount = { code: null, percentage: 0, expiresAt: null };
             } else {
                 const codeDoc = await DiscountCode.findOne({ code: player.appliedDiscount.code });
                 
                 if (codeDoc && codeDoc.isActive) {
-                    const calc = codeDoc.calculateDiscount(product.price);
+                    const calc = codeDoc.calculateDiscount(totalPrice);
                     
                     if (!calc.error) {
                         finalPrice = calc.finalPrice;
                         appliedDiscountCode = codeDoc;
-                        discountMsg = `\n🎟️ الخصم المطبق: ${codeDoc.percentage}% (-${calc.discount} ريو)\n💵 السعر النهائي: ${finalPrice} ريو`;
+                        discountMsg = `\n🎟️ الخصم: ${codeDoc.percentage}% (-${calc.discount} ريو)`;
                     }
                 }
             }
@@ -135,9 +196,15 @@ export class ShopSystem {
             };
         }
 
-        // ✅ تنفيذ الشراء
+        // ✅ خصم الرصيد
         player.gold -= finalPrice;
-        await product.purchase(1);
+
+        // ✅ خصم المخزون
+        if (product.stock !== null) {
+            product.stock -= quantity;
+        }
+        product.totalSold += quantity;
+        await product.save();
 
         // ✅ استخدام الخصم
         if (appliedDiscountCode) {
@@ -149,7 +216,6 @@ export class ShopSystem {
         let deliveryMsg = '';
 
         if (product.type === 'game_item') {
-            // منتج لعبة - يُضاف للحقيبة
             const itemInfo = this.ITEMS[product.gameItemId] || { 
                 name: this._translateItemName(product.gameItemId),
                 type: 'item'
@@ -157,47 +223,92 @@ export class ShopSystem {
             
             player.inventory = player.inventory || [];
             const existing = player.inventory.find(i => i.id === product.gameItemId);
+            const totalQty = (product.gameItemQuantity || 1) * quantity;
             
             if (existing) {
-                existing.quantity += product.gameItemQuantity;
+                existing.quantity += totalQty;
             } else {
                 player.inventory.push({
                     id: product.gameItemId,
                     name: itemInfo.name,
                     type: itemInfo.type || 'item',
-                    quantity: product.gameItemQuantity
+                    quantity: totalQty
                 });
             }
             
-            deliveryMsg = `\n📦 تم إضافة: ${product.gameItemQuantity} × ${itemInfo.name}`;
+            deliveryMsg = `\n\n📦 تم إضافة: ${totalQty} × ${itemInfo.name}`;
+        } else if (product.type === 'event_ticket') {
+            // ✅ بطاقة حدث
+            const ticket = {
+                eventName: product.ticketEventName || product.name,
+                productId: product.id,
+                boughtAt: new Date(),
+                price: finalPrice
+            };
+            
+            player.eventTickets = player.eventTickets || [];
+            player.eventTickets.push(ticket);
+            
+            deliveryMsg = `\n\n🎫 تم تسجيلك في: ${ticket.eventName}`;
+        } else if (product.type === 'subscription') {
+            // ✅ اشتراك
+            const sub = {
+                name: product.subName || product.name,
+                productId: product.id,
+                price: product.subPrice || product.price,
+                interval: product.subInterval || 'monthly',
+                startedAt: new Date(),
+                lastPaidAt: new Date(),
+                nextPayment: this._calcNextPayment(product.subInterval || 'monthly')
+            };
+            
+            player.subscriptions = player.subscriptions || [];
+            // إزالة أي اشتراك قديم بنفس الاسم
+            player.subscriptions = player.subscriptions.filter(s => s.name !== sub.name);
+            player.subscriptions.push(sub);
+            
+            deliveryMsg = `\n\n📅 تم تفعيل اشتراك: ${sub.name}`;
         } else {
-            // منتج خارجي - يُرسل رابط التسليم
+            // ✅ منتج خارجي
             const adminLink = process.env.ADMIN_PROFILE_URL || 'https://facebook.com/';
             const deliveryText = product.deliveryMessage || 'راسل الإدارة للتسليم';
             const deliveryLink = product.deliveryLink || adminLink;
-            
             const orderId = `ORD-${Date.now().toString(36).toUpperCase()}`;
             
-            deliveryMsg = `\n\n📩 للتسليم:\n${deliveryText}\n\n🔗 الرابط:\n${deliveryLink}\n\n📌 رقم طلبك:\n${orderId}`;
+            deliveryMsg = `\n\n📩 للتسليم:\n${deliveryText}\n\n🔗 ${deliveryLink}\n\n📌 رقم طلبك: ${orderId}`;
         }
 
-        // ✅ إضافة معاملة
-        player.addTransaction('purchase', finalPrice, `شراء: ${product.name}`);
+        // ✅ معاملة
+        player.addTransaction('purchase', finalPrice, `شراء: ${product.name}${quantity > 1 ? ` ×${quantity}` : ''}`);
 
         await player.save();
 
         return {
             success: true,
-            message: `✅ تم الشراء بنجاح!\n\n🛒 المنتج: ${product.name}\n💵 المدفوع: ${finalPrice} ريو${discountMsg}\n💰 رصيدك: ${player.gold} ريو${deliveryMsg}`
+            message: `✅ تم الشراء بنجاح!
+
+🛒 المنتج: ${product.name}${quantity > 1 ? `\n📦 الكمية: ${quantity}` : ''}
+💵 المدفوع: ${finalPrice} ريو${discountMsg}
+💰 رصيدك الجديد: ${player.gold} ريو${deliveryMsg}`
         };
     }
 
-    // ===================================
-    // إدارة المنتجات (للأدمن)
-    // ===================================
+    _calcNextPayment(interval) {
+        const next = new Date();
+        if (interval === 'weekly') {
+            next.setDate(next.getDate() + 7);
+        } else if (interval === 'monthly') {
+            next.setMonth(next.getMonth() + 1);
+        } else if (interval === 'daily') {
+            next.setDate(next.getDate() + 1);
+        }
+        return next;
+    }
 
+    // ===================================
+    // أوامر الأدمن
+    // ===================================
     async addProduct(data, adminId) {
-        // فحص id مكرر
         const existing = await ShopItem.findOne({ id: data.id });
         if (existing) {
             return { error: `❌ يوجد منتج بالمعرف: ${data.id}` };
@@ -212,46 +323,47 @@ export class ShopSystem {
 
         return {
             success: true,
-            message: `✅ تم إضافة المنتج\n\n🛒 الاسم: ${product.name}\n🆔 ID: ${product.id}\n💰 السعر: ${product.price} ريو\n📦 المخزون: ${product.stock === null ? '♾️' : product.stock}`
+            message: `✅ تم إضافة المنتج
+
+🛒 ${product.name}
+🆔 ${product.id}
+💰 ${product.price} ريو
+📦 ${product.stock === null ? '♾️' : product.stock}`
         };
     }
 
-    async removeProduct(productId) {
-        const product = await ShopItem.findOne({ id: productId });
+    async removeProduct(productQuery) {
+        const product = await this._findProduct(productQuery);
         if (!product) {
             return { error: `❌ المنتج غير موجود.` };
         }
 
-        await ShopItem.deleteOne({ id: productId });
+        const name = product.name;
+        await ShopItem.deleteOne({ id: product.id });
 
         return {
             success: true,
-            message: `✅ تم حذف المنتج: ${product.name}`
+            message: `✅ تم حذف المنتج: ${name}`
         };
     }
 
-    async editProduct(productId, field, value) {
-        const product = await ShopItem.findOne({ id: productId });
-        if (!product) {
-            return { error: `❌ المنتج غير موجود.` };
-        }
+    async editProduct(productQuery, field, value) {
+        const product = await this._findProduct(productQuery);
+        if (!product) return { error: `❌ المنتج غير موجود.` };
 
-        const allowedFields = ['name', 'description', 'price', 'stock', 'isActive', 'deliveryMessage', 'deliveryLink', 'displayOrder'];
+        const allowedFields = ['name', 'description', 'price', 'stock', 'isActive', 
+                               'deliveryMessage', 'deliveryLink', 'displayOrder'];
 
         if (!allowedFields.includes(field)) {
             return { error: `❌ الحقل غير قابل للتعديل: ${field}` };
         }
 
-        // تحويل القيم
         if (field === 'price' || field === 'stock' || field === 'displayOrder') {
             value = parseInt(value);
             if (isNaN(value)) return { error: '❌ قيمة غير صالحة.' };
         }
         if (field === 'isActive') {
             value = value === 'true' || value === '1' || value === 'صحيح';
-        }
-        if (field === 'stock' && value === 0) {
-            // 0 = نفذ
         }
 
         product[field] = value;
@@ -277,17 +389,15 @@ export class ShopSystem {
             const statusIcon = p.isActive ? '✅' : '❌';
             
             msg += `${index + 1}. ${statusIcon} ${p.name}\n`;
-            msg += `   🆔 ${p.id}\n`;
-            msg += `   💰 ${p.price} ريو\n`;
-            msg += `   📦 ${stockStr}\n`;
-            msg += `   🏷️ ${p.type}\n\n`;
+            msg += `   💰 ${p.price} ريو | 📦 ${stockStr}\n`;
+            msg += `   🏷️ ${p.type} | 🆔 ${p.id}\n\n`;
         });
 
         return msg;
     }
 
-    async addStock(productId, quantity) {
-        const product = await ShopItem.findOne({ id: productId });
+    async addStock(productQuery, quantity) {
+        const product = await this._findProduct(productQuery);
         if (!product) return { error: `❌ المنتج غير موجود.` };
 
         if (product.stock === null) {
@@ -299,7 +409,7 @@ export class ShopSystem {
 
         return {
             success: true,
-            message: `✅ تم إضافة ${quantity} للمخزون\n\n🛒 ${product.name}\n📦 المخزون الجديد: ${product.stock}`
+            message: `✅ تم إضافة ${quantity} للمخزون\n\n🛒 ${product.name}\n📦 المخزون: ${product.stock}`
         };
     }
-}
+                }

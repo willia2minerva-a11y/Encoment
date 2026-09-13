@@ -1,6 +1,5 @@
 // index.js
 // الموقع: سوق ريو (الاقتصاد)
-import { DataLoader } from './systems/data/DataLoader.js';
 import mongoose from 'mongoose';
 import 'dotenv/config';
 import express from 'express';

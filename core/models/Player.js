@@ -1,5 +1,5 @@
 // core/Player.js
-// الموقع: لعبة مغارة ريو (والسوق يستخدم نسخة مشابهة)
+// الموقع: سوق ريو
 import mongoose from 'mongoose';
 import { DataLoader } from '../../systems/data/DataLoader.js';
 
@@ -548,5 +548,50 @@ playerSchema.statics.createAccount = async function(username, passwordHash, gend
     return player;
 };
 
+// ===================================
+// إنشاء الموديل
+// ===================================
 const Player = mongoose.model('Player', playerSchema);
+
+// ===================================
+// ✅ إصلاح: حذف الفهارس القديمة (userId_1) من نسخة سابقة
+// ===================================
+(async () => {
+    try {
+        const waitForConnection = () => new Promise((resolve) => {
+            if (mongoose.connection.readyState === 1) return resolve();
+            mongoose.connection.once('connected', resolve);
+            setTimeout(resolve, 30000);
+        });
+
+        await waitForConnection();
+
+        if (mongoose.connection.readyState !== 1) {
+            console.log('ℹ️ [سوق ريو] لم يتم الاتصال بـ MongoDB، تخطي حذف الفهارس');
+            return;
+        }
+
+        const collection = mongoose.connection.collection('players');
+        const indexes = await collection.indexes();
+
+        const oldIndexes = ['userId_1', 'userId_1_sparse'];
+
+        for (const idxName of oldIndexes) {
+            const exists = indexes.find(i => i.name === idxName);
+            if (exists) {
+                try {
+                    await collection.dropIndex(idxName);
+                    console.log(`✅ [سوق ريو] تم حذف الفهرس القديم: ${idxName}`);
+                } catch (err) {
+                    console.error(`⚠️ [سوق ريو] فشل حذف ${idxName}:`, err.message);
+                }
+            }
+        }
+
+        console.log('✅ [سوق ريو] فحص الفهارس القديمة اكتمل');
+    } catch (error) {
+        console.error('⚠️ [سوق ريو] خطأ في فحص الفهارس:', error.message);
+    }
+})();
+
 export default Player;

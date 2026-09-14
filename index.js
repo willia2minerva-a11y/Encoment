@@ -5,10 +5,11 @@ import mongoose from 'mongoose';
 import 'dotenv/config';
 import express from 'express';
 import axios from 'axios';
+import FormData from 'form-data';
 import fs from 'fs';
 import path from 'path';
 import CommandHandler from './core/CommandHandler.js';
-import { MessageGateway } from './core/MessageGateway.js';
+import MessageGateway from './core/MessageGateway.js';
 
 const MONGODB_URI = process.env.MONGODB_URI;
 const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN;
@@ -26,31 +27,7 @@ app.use(express.urlencoded({ extended: true }));
 
 let commandHandler;
 let telegramBotInstance = null;
-
-// ===================================
-// ✅ Messenger Gateway — إرسال آمن (5-8 ثواني بين الرسائل)
-// ===================================
-const messengerGateway = new MessageGateway(
-  {
-    send: async (msg) => {
-      await axios.post(
-        `https://graph.facebook.com/v19.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`,
-        {
-          recipient: { id: msg.recipientId },
-          message: { text: msg.text }
-        }
-      );
-    }
-  },
-  {
-    name: 'FB-Gateway-Souq',
-    minIntervalMs: 5000,       // 5 ثواني أساس
-    jitterMs: 3000,            // + 0-3 ثواني عشوائية
-    maxPerHour: 150,           // 150 رسالة/ساعة
-    maxPerDay: 1500,           // 1500 رسالة/يوم
-    maxRetries: 2
-  }
-);
+let messageGateway;
 
 // ===================================
 // الاتصال بقاعدة البيانات
@@ -66,40 +43,46 @@ async function connectDatabase() {
 }
 
 // ===================================
-// إرسال رسائل فيسبوك (عبر Gateway)
+// Transports
 // ===================================
-async function sendTextMessage(senderId, text, priority = 'normal') {
-  messengerGateway.enqueue({
-    recipientId: senderId,
-    text
-  }, priority);
+async function sendTextTransport(recipientId, text) {
+  const response = await axios.post(
+    `https://graph.facebook.com/v19.0/me/messages?access_token=${PAGE_ACCESS_TOKEN}`,
+    {
+      recipient: { id: recipientId },
+      message: { text: text }
+    },
+    { timeout: 20000 }
+  );
+  return response.data;
 }
 
-async function sendImageMessage(senderId, imagePath, caption = '') {
+async function sendImageTransport(recipientId, imagePath, caption = '') {
+  if (!fs.existsSync(imagePath)) {
+    throw new Error(`الملف غير موجود: ${imagePath}`);
+  }
+
+  const formData = new FormData();
+  formData.append('filedata', fs.createReadStream(imagePath), {
+    filename: path.basename(imagePath),
+    contentType: 'image/png',
+  });
+  formData.append('recipient', JSON.stringify({ id: recipientId }));
+  formData.append('message', JSON.stringify({
+    attachment: { type: 'image', payload: { is_reusable: true } }
+  }));
+
   try {
-    if (!fs.existsSync(imagePath)) throw new Error(`الملف غير موجود: ${imagePath}`);
-
-    const FormData = (await import('form-data')).default;
-    const formData = new FormData();
-    formData.append('filedata', fs.createReadStream(imagePath), {
-      filename: path.basename(imagePath),
-      contentType: 'image/png',
-    });
-    formData.append('recipient', JSON.stringify({ id: senderId }));
-    formData.append('message', JSON.stringify({
-      attachment: { type: 'image', payload: { is_reusable: true } }
-    }));
-
-    await axios.post(
+    const response = await axios.post(
       'https://graph.facebook.com/v19.0/me/messages',
       formData,
-      { params: { access_token: PAGE_ACCESS_TOKEN }, headers: { ...formData.getHeaders() } }
+      {
+        params: { access_token: PAGE_ACCESS_TOKEN },
+        headers: { ...formData.getHeaders() },
+        timeout: 30000
+      }
     );
-
-    console.log(`✅ صورة إلى ${senderId}`);
-  } catch (error) {
-    console.error('❌ خطأ في إرسال الصورة:', error.response?.data || error.message);
-    if (caption) await sendTextMessage(senderId, caption + '\n\n(❌ فشل تحميل الصورة)');
+    return response.data;
   } finally {
     if (fs.existsSync(imagePath)) {
       try { fs.unlinkSync(imagePath); } catch (e) {}
@@ -108,39 +91,75 @@ async function sendImageMessage(senderId, imagePath, caption = '') {
 }
 
 // ===================================
-// معالجة الإعلانات (عبر Gateway)
+// تهيئة Gateway
+// ===================================
+function setupMessageGateway() {
+  messageGateway = new MessageGateway({
+    sendText: sendTextTransport,
+    sendImage: sendImageTransport,
+    logger: console,
+    name: 'FB-Gateway-Souq'
+  });
+  messageGateway.startMonitor();
+  console.log('🛡️ MessageGateway مفعل (5-15s / 16s spam)');
+}
+
+// ===================================
+// Helpers
+// ===================================
+async function sendTextMessage(senderId, text, options = {}) {
+  if (!messageGateway) setupMessageGateway();
+  try {
+    return await messageGateway.sendText(senderId, text, options);
+  } catch (error) {
+    console.error('❌ فشل الإرسال:', error.message);
+    return null;
+  }
+}
+
+async function sendImageMessage(senderId, imagePath, caption = '', options = {}) {
+  if (!messageGateway) setupMessageGateway();
+  try {
+    return await messageGateway.sendImage(senderId, imagePath, caption, options);
+  } catch (error) {
+    console.error('❌ فشل إرسال الصورة:', error.message);
+    return null;
+  }
+}
+
+// ===================================
+// معالجة الإعلانات
 // ===================================
 async function handleAnnouncement(response, senderId) {
-  console.log(`📢 بدء إرسال الإعلان لـ ${response.recipients.length} مستخدم عبر Gateway...`);
-  let successCount = 0;
+  console.log(`📢 جدولة إعلان لـ ${response.recipients.length} مستخدم...`);
+  let queuedCount = 0;
   let failCount = 0;
 
   for (const recipient of response.recipients) {
     try {
       if (recipient.platform === 'facebook') {
-        // ✅ يمر عبر Gateway (low priority للإعلانات)
-        await sendTextMessage(recipient.platformId, response.text, 'low');
-        successCount++;
+        await sendTextMessage(recipient.platformId, response.text, { priority: 'low' });
+        queuedCount++;
       } else if (recipient.platform === 'telegram' && telegramBotInstance) {
         try {
           await telegramBotInstance.sendMessage(recipient.platformId.replace('tg_', ''), response.text);
-          successCount++;
+          queuedCount++;
         } catch (e) {
           failCount++;
         }
       }
-      // ⚠️ لا setTimeout — Gateway يدير التوقيت
     } catch (error) {
       failCount++;
-      console.error(`❌ فشل الإرسال إلى ${recipient.platformId}:`, error.message);
+      console.error(`❌ فشل جدولة ${recipient.platformId}:`, error.message);
     }
   }
 
-  console.log(`✅ تم جدولة الإعلان: ${successCount} في الطابور، ${failCount} فشل`);
+  const minutes = Math.ceil(queuedCount * 10 / 60);
+  console.log(`✅ تم جدولة: ${queuedCount} | فشل: ${failCount}`);
 
   await sendTextMessage(
     senderId,
-    `📢 تم إرسال الإعلان للطابور\n\n✅ في الطابور: ${successCount}\n❌ فشل: ${failCount}\n📊 الإجمالي: ${response.recipients.length}\n\n⏰ سيتم الإرسال تدريجيًا (~${Math.ceil(successCount * 6.5 / 60)} دقيقة)`
+    `📢 تم جدولة الإعلان\n\n✅ في الطابور: ${queuedCount}\n❌ فشل: ${failCount}\n📊 الإجمالي: ${response.recipients.length}\n\n⏰ سيُرسل تدريجيًا (~${minutes} دقيقة)`
   );
 }
 
@@ -225,7 +244,7 @@ app.post('/webhook', async (req, res) => {
 });
 
 // ===================================
-// Health Check
+// Health + Stats
 // ===================================
 app.get('/', (req, res) => {
   res.status(200).json({
@@ -236,26 +255,9 @@ app.get('/', (req, res) => {
   });
 });
 
-// ===================================
-// Gateway Stats
-// ===================================
 app.get('/gateway', (req, res) => {
-  res.status(200).json(messengerGateway.getStats());
-});
-
-// ===================================
-// Graceful Shutdown
-// ===================================
-process.on('SIGTERM', async () => {
-  console.log('🛑 SIGTERM — إيقاف آمن');
-  await messengerGateway.shutdown();
-  process.exit(0);
-});
-
-process.on('SIGINT', async () => {
-  console.log('🛑 SIGINT — إيقاف آمن');
-  await messengerGateway.shutdown();
-  process.exit(0);
+  if (!messageGateway) return res.status(503).json({ error: 'Gateway not ready' });
+  res.status(200).json(messageGateway.getStatus());
 });
 
 // ===================================
@@ -270,36 +272,43 @@ process.on('uncaughtException', (error) => {
 });
 
 // ===================================
+// Graceful Shutdown
+// ===================================
+process.on('SIGTERM', async () => {
+  console.log('🛑 SIGTERM — إيقاف آمن');
+  if (messageGateway) await messageGateway.shutdown();
+  process.exit(0);
+});
+
+process.on('SIGINT', async () => {
+  console.log('🛑 SIGINT — إيقاف آمن');
+  if (messageGateway) await messageGateway.shutdown();
+  process.exit(0);
+});
+
+// ===================================
 // Main
 // ===================================
 async function main() {
   console.log('🚀 بدء تشغيل سوق ريو - Souq Rio...');
 
   try {
-    // ✅ 1. الاتصال بقاعدة البيانات
     await connectDatabase();
-
-    // ✅ 2. تحميل البيانات من MongoDB
     await DataLoader.initialize();
 
-    // ✅ 2.5. إنشاء/تحديث الأدمن الرئيسي
     const Player = (await import('./core/models/Player.js')).default;
     await Player.ensureRootAdmin();
 
-    // ✅ 3. CommandHandler
     commandHandler = new CommandHandler();
     console.log('✅ تم تهيئة CommandHandler');
 
-    // ✅ 3.5. تشغيل مراقب Gateway
-    messengerGateway.startMonitor();
+    setupMessageGateway();
 
-    // ✅ 4. بوت تلغرام
     if (process.env.TELEGRAM_BOT_TOKEN) {
       const telegramModule = await import('./telegramBot.js');
       telegramBotInstance = telegramModule.default;
     }
 
-    // ✅ 5. الخادم
     app.listen(PORT, () => {
       console.log(`✅ يعمل على المنفذ ${PORT}`);
       console.log('📱 جاهز لاستقبال الرسائل');

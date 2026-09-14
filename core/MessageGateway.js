@@ -1,439 +1,465 @@
- // core/MessageGateway.js
+// core/MessageGateway.js
 // الموقع: مشترك (مغارة ريو + سوق ريو)
-// Purpose: Queue + Rate Control + Reputation Protection
+// Purpose: Queue + Rate Control + Anti-Spam + 1893063 Handling
 
-export class MessageGateway {
-    constructor(transport, options = {}) {
-        if (!transport || typeof transport.send !== 'function') {
-            throw new Error('MessageGateway: transport.send is required');
+export default class MessageGateway {
+    constructor({ sendText, sendImage, logger = console, name = 'Gateway' } = {}) {
+        if (typeof sendText !== 'function') {
+            throw new Error('MessageGateway: sendText required');
         }
 
-        this.transport = transport;
-        this.name = options.name || 'Gateway';
+        this.sendTextTransport = sendText;
+        this.sendImageTransport = sendImage || null;
+        this.logger = logger;
+        this.name = name;
 
-        // ============================================
-        // ⚙️ إعدادات معدل الإرسال (بطيء ومقصود)
-        // ============================================
-        this.minIntervalMs = options.minIntervalMs || 5000;      // 5 ثواني أساس
-        this.jitterMs = options.jitterMs || 3000;                // + 0-3 ثواني عشوائية
-        this.maxQueueSize = options.maxQueueSize || 500;
+        // ⏱️ الفواصل الزمنية: 5-15 ثانية
+        this.minIntervalMs = 5000;       // 5s minimum
+        this.maxIntervalMs = 15000;      // 15s maximum
+        this.spamIntervalMs = 16000;     // 16s if spam detected
 
-        // ============================================
-        // 🚧 الحدود القصوى (Hard Caps)
-        // ============================================
-        this.maxPerHour = options.maxPerHour || 150;             // 150 رسالة/ساعة
-        this.maxPerDay = options.maxPerDay || 1500;              // 1500 رسالة/يوم
+        // 🚨 وضع السبام العام
+        this.spamQueueThreshold = 20;    // queue > 20 → spam mode
+        this.spamDurationMs = 5 * 60 * 1000;  // spam mode lasts 5 min
+        this.spamUntil = 0;
 
-        // ============================================
-        // 🔄 Retry
-        // ============================================
-        this.maxRetries = options.maxRetries || 2;
-        this.retryDelayMs = options.retryDelayMs || 120000;      // دقيقتان
+        // 👤 فاصل كل لاعب (لمنع إغراق لاعب واحد)
+        this.perUserMinIntervalMs = 3000;      // 3s min between messages to same user
+        this.perUserSpamWindowMs = 60 * 1000;  // 60s window
+        this.perUserSpamThreshold = 5;         // > 5 messages in 60s = spam
+        this.perUserSpamIntervalMs = 20000;    // 20s if user is spammer
+        this.userLastSent = new Map();
+        this.userRecentSends = new Map();
 
-        // ============================================
-        // 🧠 حالة Gateway
-        // ============================================
-        this.queue = [];
-        this.processing = false;
-        this.paused = false;
-        this.pausedUntil = 0;
-        this.pauseCount = 0;
-        this.consecutiveErrors = 0;
-        this.lastSendTime = 0;
-        this.shuttingDown = false;
+        // 🚧 الحدود القصوى
+        this.maxQueueSize = 500;
+        this.maxQueueAgeMs = 24 * 60 * 60 * 1000;
+        this.maxPerHour = 300;   // 5/min target
+        this.maxPerDay = 6000;
 
-        // ============================================
-        // 📊 عدادات (Hourly / Daily)
-        // ============================================
+        // 📊 العدادات
         this.hourStart = Date.now();
         this.dayStart = Date.now();
         this.hourlySent = 0;
         this.dailySent = 0;
 
-        // ============================================
+        // 🔄 Retry
+        this.maxRetries = 2;
+        this.retryDelayMs = 60000;
+
+        // 🧠 الحالة
+        this.queue = [];
+        this.processing = false;
+        this.lastSentAt = 0;
+
+        // 🛑 Circuit breaker for 1893063
+        this.restrictionUntil = 0;
+        this.restrictionLevel = 0;
+        this.restrictionDurations = [
+            30 * 60 * 1000,     // 30 min
+            2 * 60 * 60 * 1000, // 2h
+            6 * 60 * 60 * 1000, // 6h
+            12 * 60 * 60 * 1000,// 12h
+            24 * 60 * 60 * 1000 // 24h
+        ];
+
         // 📈 إحصائيات
-        // ============================================
         this.stats = {
             sent: 0,
             failed: 0,
             dropped: 0,
             retried: 0,
-            totalPauses: 0,
-            emergencyStops: 0
+            restrictions: 0,
+            outOfWindow: 0,
+            hourlyLimited: 0,
+            spamModeEntries: 0
         };
 
-        // ============================================
-        // 🧹 Cleanup
-        // ============================================
-        this._cleanupInterval = setInterval(() => this._cleanup(), 5 * 60 * 1000);
-
         console.log(`📡 [${this.name}] تم التهيئة`);
-        console.log(`   ⏱️ الفاصل: ${this.minIntervalMs / 1000}-${(this.minIntervalMs + this.jitterMs) / 1000} ثانية`);
+        console.log(`   ⏱️ الفاصل: ${this.minIntervalMs / 1000}-${this.maxIntervalMs / 1000}s`);
         console.log(`   🚧 الحدود: ${this.maxPerHour}/ساعة | ${this.maxPerDay}/يوم`);
     }
 
-    // ============================================
-    // ✅ API الرئيسي
-    // ============================================
-    enqueue(message, priority = 'normal') {
-        if (this.shuttingDown) {
-            console.warn(`⚠️ [${this.name}] السيرفر يُغلق — تم تجاهل رسالة`);
-            return false;
-        }
-
-        // حماية من امتلاء الطابور
-        if (this.queue.length >= this.maxQueueSize) {
-            this.stats.dropped++;
-            console.warn(`⚠️ [${this.name}] الطابور ممتلئ — تم تجاهل رسالة`);
-            return false;
-        }
-
-        this.queue.push({
-            ...message,
-            priority,
-            queuedAt: Date.now(),
-            attempts: 0
+    // ===================================
+    // API الرئيسي
+    // ===================================
+    sendText(recipientId, text, options = {}) {
+        return this._enqueue({
+            type: 'text',
+            recipientId,
+            payload: text,
+            priority: options.priority || 'normal',
+            ttlMs: options.ttlMs || this.maxQueueAgeMs
         });
-
-        this._processQueue();
-        return true;
     }
 
-    // ============================================
-    // 🔄 المعالجة الرئيسية
-    // ============================================
+    sendImage(recipientId, imagePath, caption = '', options = {}) {
+        if (!this.sendImageTransport) {
+            return Promise.reject(new Error('sendImage not configured'));
+        }
+        return this._enqueue({
+            type: 'image',
+            recipientId,
+            payload: { imagePath, caption },
+            priority: options.priority || 'high',
+            ttlMs: options.ttlMs || this.maxQueueAgeMs
+        });
+    }
+
+    _enqueue(item) {
+        if (!item.recipientId) {
+            return Promise.reject(new Error('recipientId required'));
+        }
+
+        // 🛑 متوقف بسبب تقييد
+        if (this._isRestricted()) {
+            const remaining = Math.ceil((this.restrictionUntil - Date.now()) / 60000);
+            this.stats.dropped++;
+            console.warn(`⏸️ [${this.name}] مقيّد (${remaining}د) — رفض رسالة`);
+            return Promise.reject(new Error(`Restricted for ${remaining} min`));
+        }
+
+        // 🚧 حد الساعة
+        this._resetCountersIfNeeded();
+        if (this.hourlySent >= this.maxPerHour) {
+            this.stats.hourlyLimited++;
+            console.warn(`⏰ [${this.name}] تجاوز الحد الساعي (${this.maxPerHour}) — رفض`);
+            return Promise.reject(new Error('Hourly limit reached'));
+        }
+
+        // 🚧 حد اليوم
+        if (this.dailySent >= this.maxPerDay) {
+            console.warn(`⏰ [${this.name}] تجاوز الحد اليومي — رفض`);
+            return Promise.reject(new Error('Daily limit reached'));
+        }
+
+        // 🚧 حجم الطابور
+        if (this.queue.length >= this.maxQueueSize) {
+            const lowIdx = this.queue.findIndex(m => m.priority === 'low');
+            if (lowIdx >= 0) {
+                const dropped = this.queue.splice(lowIdx, 1)[0];
+                dropped.reject(new Error('Queue overflow'));
+                this.stats.dropped++;
+            } else {
+                this.stats.dropped++;
+                return Promise.reject(new Error('Queue full'));
+            }
+        }
+
+        let resolvePromise, rejectPromise;
+        const queued = {
+            ...item,
+            createdAt: Date.now(),
+            attempts: 0,
+            sequence: Date.now() + Math.random(),
+            promise: new Promise((res, rej) => {
+                resolvePromise = res;
+                rejectPromise = rej;
+            }),
+            resolve: resolvePromise,
+            reject: rejectPromise
+        };
+
+        this.queue.push(queued);
+        this._processQueue();
+        return queued.promise;
+    }
+
+    // ===================================
+    // معالجة الطابور
+    // ===================================
     async _processQueue() {
         if (this.processing) return;
         this.processing = true;
 
         try {
-            while (this.queue.length > 0 && !this.shuttingDown) {
-                // ⏸️ إذا متوقف — انتظر
-                if (this.paused) {
-                    await this._waitForUnpause();
-                    if (this.shuttingDown) break;
+            while (this.queue.length > 0) {
+                this._removeExpired();
+
+                if (this.queue.length === 0) break;
+
+                // ⏸️ مقيّد
+                if (this._isRestricted()) {
+                    const wait = Math.min(60000, this.restrictionUntil - Date.now());
+                    if (wait > 0) await this._sleep(wait);
+                    continue;
                 }
 
-                // 📊 فحص الحدود القصوى
+                // ⏰ حد الساعة
                 this._resetCountersIfNeeded();
-
                 if (this.hourlySent >= this.maxPerHour) {
                     const wait = this.hourStart + 60 * 60 * 1000 - Date.now();
                     if (wait > 0) {
-                        console.log(`⏰ [${this.name}] بلغنا الحد الساعي — انتظار ${Math.ceil(wait / 60000)} دقيقة`);
-                        await new Promise(r => setTimeout(r, wait));
+                        console.log(`⏰ [${this.name}] الحد الساعي — انتظار ${Math.ceil(wait / 60000)}د`);
+                        await this._sleep(Math.min(wait, 5 * 60 * 1000));
                         continue;
                     }
                 }
 
-                if (this.dailySent >= this.maxPerDay) {
-                    const wait = this.dayStart + 24 * 60 * 60 * 1000 - Date.now();
-                    if (wait > 0) {
-                        console.log(`⏰ [${this.name}] بلغنا الحد اليومي — انتظار ${Math.ceil(wait / 3600000)} ساعة`);
-                        await new Promise(r => setTimeout(r, wait));
-                        continue;
-                    }
-                }
-
-                // ✅ ترتيب حسب الأولوية
+                // ترتيب حسب الأولوية
                 this.queue.sort((a, b) => {
-                    const order = { critical: 0, high: 1, normal: 2, low: 3 };
-                    const diff = (order[a.priority] ?? 2) - (order[b.priority] ?? 2);
-                    if (diff !== 0) return diff;
-                    return a.queuedAt - b.queuedAt;
+                    const pr = { critical: 0, high: 1, normal: 2, low: 3 };
+                    const diff = (pr[a.priority] ?? 2) - (pr[b.priority] ?? 2);
+                    return diff || a.sequence - b.sequence;
                 });
 
                 const msg = this.queue.shift();
 
-                // ⏱️ طبّق الفاصل الزمني
-                await this._applyDelay();
+                try {
+                    await this._waitForGlobalSlot();
+                    await this._waitForUserSlot(msg.recipientId);
 
-                // 📤 حاول الإرسال
-                const success = await this._sendWithRetry(msg);
+                    const result = await this._sendWithRetry(msg);
 
-                if (success) {
                     this.stats.sent++;
                     this.hourlySent++;
                     this.dailySent++;
-                    this.consecutiveErrors = 0;
+                    this.lastSentAt = Date.now();
+                    this.userLastSent.set(msg.recipientId, Date.now());
+                    this._trackUserSend(msg.recipientId);
+
+                    msg.resolve(result);
+                } catch (error) {
+                    this.stats.failed++;
+                    msg.reject(error);
                 }
             }
-        } catch (error) {
-            console.error(`❌ [${this.name}] خطأ في المعالجة:`, error.message);
         } finally {
             this.processing = false;
 
-            // إذا وصلت رسائل جديدة أثناء المعالجة — أعد التشغيل
-            if (this.queue.length > 0 && !this.shuttingDown && !this.paused) {
+            if (this.queue.length > 0 && !this._isRestricted()) {
                 setTimeout(() => this._processQueue(), 1000);
             }
         }
     }
 
-    // ============================================
-    // ⏱️ تطبيق الفاصل الزمني + Jitter
-    // ============================================
-    async _applyDelay() {
-    
-     const jitter = Math.floor(Math.random() * this.jitterMs);
-     const wait = this.minIntervalMs + jitter;
-     await new Promise(r => setTimeout(r, wait));
+    // ===================================
+    // الفاصل الزمني العام (5-15s + spam)
+    // ===================================
+    async _waitForGlobalSlot() {
+        const interval = this._getCurrentInterval();
+        const elapsed = Date.now() - this.lastSentAt;
+        const wait = Math.max(0, interval - elapsed);
+        if (wait > 0) await this._sleep(wait);
     }
 
-    // ============================================
-    // 📤 الإرسال مع Retry
-    // ============================================
+    _getCurrentInterval() {
+        // 🚨 وضع السبام
+        if (Date.now() < this.spamUntil) {
+            return this.spamIntervalMs;
+        }
+
+        // 🚧 طابور كبير → تفعيل السبام
+        if (this.queue.length >= this.spamQueueThreshold) {
+            this._enterSpamMode();
+            return this.spamIntervalMs;
+        }
+
+        // 🎲 5-15 ثانية عشوائية
+        const range = this.maxIntervalMs - this.minIntervalMs;
+        return this.minIntervalMs + Math.floor(Math.random() * (range + 1));
+    }
+
+    _enterSpamMode() {
+        if (Date.now() >= this.spamUntil) {
+            this.spamUntil = Date.now() + this.spamDurationMs;
+            this.stats.spamModeEntries++;
+            console.log(`🚨 [${this.name}] وضع السبام (${this.queue.length} في الطابور) — فاصل 16s`);
+        }
+    }
+
+    // ===================================
+    // فاصل كل لاعب
+    // ===================================
+    async _waitForUserSlot(recipientId) {
+        const last = this.userLastSent.get(recipientId) || 0;
+        const recent = this.userRecentSends.get(recipientId) || [];
+
+        const cutoff = Date.now() - this.perUserSpamWindowMs;
+        const recentValid = recent.filter(t => t > cutoff);
+
+        const isUserSpam = recentValid.length >= this.perUserSpamThreshold;
+        const interval = isUserSpam ? this.perUserSpamIntervalMs : this.perUserMinIntervalMs;
+
+        const wait = Math.max(0, interval - (Date.now() - last));
+        if (wait > 0) await this._sleep(wait);
+    }
+
+    _trackUserSend(recipientId) {
+        const now = Date.now();
+        const cutoff = now - this.perUserSpamWindowMs;
+
+        let recent = this.userRecentSends.get(recipientId) || [];
+        recent = recent.filter(t => t > cutoff);
+        recent.push(now);
+        this.userRecentSends.set(recipientId, recent);
+
+        // تنظيف كل فترة
+        if (this.userRecentSends.size > 1000) {
+            for (const [uid, times] of this.userRecentSends.entries()) {
+                const valid = times.filter(t => t > cutoff);
+                if (valid.length === 0) this.userRecentSends.delete(uid);
+                else this.userRecentSends.set(uid, valid);
+            }
+        }
+    }
+
+    // ===================================
+    // الإرسال مع Retry (bug fixed)
+    // ===================================
     async _sendWithRetry(msg) {
-        try {
-            await this.transport.send(msg);
-            this.lastSendTime = Date.now();
-            return true;
-        } catch (error) {
-            const errorInfo = this._classifyError(error);
-
-            // 🚨 1. تقييد من Meta (1893063 أو 613)
-            if (errorInfo.type === 'rate_limit') {
-                console.warn(`🚫 [${this.name}] تقييد Meta: ${errorInfo.message}`);
-                this._pause();
-
-                // أعِد الرسالة للطابور
-                if (msg.attempts < this.maxRetries) {
-                    msg.queuedAt = Date.now();
-                    this.queue.unshift(msg);
-                } else {
-                    this.stats.dropped++;
+        while (true) {
+            try {
+                if (msg.type === 'image') {
+                    return await this.sendImageTransport(
+                        msg.recipientId,
+                        msg.payload.imagePath,
+                        msg.payload.caption
+                    );
                 }
-                return false;
+                return await this.sendTextTransport(msg.recipientId, msg.payload);
+            } catch (error) {
+                const kind = this._classifyError(error);
+
+                // 🛑 1893063 - تقييد
+                if (kind === 'restriction') {
+                    this.stats.restrictions++;
+                    this._activateRestriction();
+                    throw error;
+                }
+
+                if (kind === 'out_of_window') {
+                    this.stats.outOfWindow++;
+                    throw error;
+                }
+
+                if (kind === 'permission') {
+                    throw error;
+                }
+
+                const canRetry = msg.type === 'text';
+                const canRetryError = (kind === 'rate_limit' || kind === 'temporary');
+
+                if (canRetry && canRetryError && msg.attempts < this.maxRetries) {
+                    msg.attempts++;  // ✅ إصلاح الـ bug
+                    this.stats.retried++;
+                    await this._sleep(this.retryDelayMs);
+                    continue;
+                }
+
+                throw error;
             }
-
-            // 🚪 2. خارج نافذة 24 ساعة → تجاهل فوري
-            if (errorInfo.type === 'out_of_window') {
-                console.warn(`🚪 [${this.name}] خارج نافذة 24 ساعة — تجاهل`);
-                this.stats.dropped++;
-                return false;
-            }
-
-            // 🔒 3. حظر الصفحة
-            if (errorInfo.type === 'page_blocked') {
-                console.error(`🔒 [${this.name}] الصفحة محظورة — توقف طارئ 24 ساعة`);
-                this._emergencyStop();
-                this.stats.dropped++;
-                return false;
-            }
-
-            // 🔧 4. أخطاء أخرى → Retry
-            console.error(`❌ [${this.name}] فشل:`, errorInfo.message);
-            this.consecutiveErrors++;
-
-            // حماية من الأخطاء المتكررة (Emergency Stop)
-            if (this.consecutiveErrors >= 5) {
-                console.error(`🚨 [${this.name}] 5 أخطاء متتالية — توقف طارئ 24 ساعة`);
-                this._emergencyStop();
-                this.stats.failed++;
-                return false;
-            }
-
-            if (msg.attempts < this.maxRetries) {
-                msg.attempts++;
-                this.stats.retried++;
-                this.stats.failed++;
-
-                setTimeout(() => {
-                    this.queue.push(msg);
-                    this._processQueue();
-                }, this.retryDelayMs);
-                return false;
-            }
-
-            this.stats.failed++;
-            return false;
         }
     }
 
-    // ============================================
-    // 🔍 تحليل أخطاء Meta
-    // ============================================
     _classifyError(error) {
-        const errData = error?.response?.data?.error;
+        const data = error?.response?.data?.error || {};
+        const code = Number(data.code);
+        const subcode = Number(data.error_subcode);
 
-        if (errData) {
-            // 1893063 = تقييد الصفحة
-            if (errData.code === 10 && errData.error_subcode === 1893063) {
-                return { type: 'rate_limit', message: 'Page restricted (1893063)' };
-            }
+        if (subcode === 1893063) return 'restriction';
+        if (code === 613) return 'rate_limit';
+        if (code === 10 && subcode === 2018278) return 'out_of_window';
+        if (code === 190 || code === 200) return 'permission';
 
-            // 613 = Rate limit عام
-            if (errData.code === 613) {
-                return { type: 'rate_limit', message: 'Rate limit (613)' };
-            }
+        const status = Number(error?.response?.status);
+        if (status === 429 || status >= 500) return 'temporary';
 
-            // 2018278 = خارج نافذة 24 ساعة
-            if (errData.code === 10 && errData.error_subcode === 2018278) {
-                return { type: 'out_of_window', message: 'Out of 24h window' };
-            }
-
-            // 190 = Token
-            if (errData.code === 190) {
-                return { type: 'page_blocked', message: `Token invalid: ${errData.message}` };
-            }
-
-            // 200 = صلاحيات
-            if (errData.code === 200) {
-                return { type: 'permission', message: `Permission: ${errData.message}` };
-            }
-
-            return {
-                type: 'unknown',
-                message: `Meta ${errData.code}/${errData.error_subcode || '-'}: ${errData.message}`
-            };
-        }
-
-        return { type: 'unknown', message: error.message || 'Unknown' };
+        return 'permanent';
     }
 
-    // ============================================
-    // ⏸️ إيقاف تدريجي (Pause with Backoff)
-    // ============================================
-    _pause() {
-        this.pauseCount++;
-        this.stats.totalPauses++;
-
-        // تدرج: 30د → 2س → 6س → 12س → 24س
-        const durations = [
-            30 * 60 * 1000,         // 30 min
-            2 * 60 * 60 * 1000,     // 2 hours
-            6 * 60 * 60 * 1000,     // 6 hours
-            12 * 60 * 60 * 1000,    // 12 hours
-            24 * 60 * 60 * 1000     // 24 hours (max)
+    _activateRestriction() {
+        const duration = this.restrictionDurations[
+            Math.min(this.restrictionLevel, this.restrictionDurations.length - 1)
         ];
-        const duration = durations[Math.min(this.pauseCount - 1, durations.length - 1)];
 
-        this.paused = true;
-        this.pausedUntil = Date.now() + duration;
+        this.restrictionUntil = Date.now() + duration;
+        this.restrictionLevel = Math.min(
+            this.restrictionLevel + 1,
+            this.restrictionDurations.length - 1
+        );
 
-        const until = new Date(this.pausedUntil).toLocaleString('ar-EG');
-        console.log(`⏸️ [${this.name}] متوقف حتى ${until} (المرة ${this.pauseCount})`);
+        const min = Math.round(duration / 60000);
+        console.log(`🛑 [${this.name}] 1893063 — إيقاف ${min}د (المستوى ${this.restrictionLevel})`);
     }
 
-    // ============================================
-    // 🚨 إيقاف طارئ (24 ساعة)
-    // ============================================
-    _emergencyStop() {
-        this.stats.emergencyStops++;
-        this.paused = true;
-        this.pausedUntil = Date.now() + 24 * 60 * 60 * 1000;
-        this.consecutiveErrors = 0;
-
-        const until = new Date(this.pausedUntil).toLocaleString('ar-EG');
-        console.log(`🚨 [${this.name}] إيقاف طارئ حتى ${until}`);
+    _isRestricted() {
+        return Date.now() < this.restrictionUntil;
     }
 
-    async _waitForUnpause() {
-        const waitTime = this.pausedUntil - Date.now();
-        if (waitTime > 0) {
-            await new Promise(r => setTimeout(r, waitTime));
-        }
-        this.paused = false;
-        console.log(`▶️ [${this.name}] استئناف الإرسال`);
-    }
-
-    // ============================================
-    // 🔄 إعادة تعيين العدادات
-    // ============================================
+    // ===================================
+    // أدوات مساعدة
+    // ===================================
     _resetCountersIfNeeded() {
         const now = Date.now();
-
         if (now - this.hourStart >= 60 * 60 * 1000) {
             this.hourStart = now;
             this.hourlySent = 0;
         }
-
         if (now - this.dayStart >= 24 * 60 * 60 * 1000) {
             this.dayStart = now;
             this.dailySent = 0;
         }
     }
 
-    // ============================================
-    // 🧹 تنظيف دوري
-    // ============================================
-    _cleanup() {
-        // إزالة الرسائل القديمة جدًا (أكثر من 24 ساعة في الطابور)
-        const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-        const before = this.queue.length;
-        this.queue = this.queue.filter(m => m.queuedAt > cutoff);
-        const removed = before - this.queue.length;
-
-        if (removed > 0) {
-            this.stats.dropped += removed;
-            console.log(`🧹 [${this.name}] تم حذف ${removed} رسالة قديمة`);
+    _removeExpired() {
+        const now = Date.now();
+        const kept = [];
+        for (const msg of this.queue) {
+            const ttl = msg.ttlMs || this.maxQueueAgeMs;
+            if (now - msg.createdAt > ttl) {
+                this.stats.dropped++;
+                msg.reject(new Error('Expired'));
+            } else {
+                kept.push(msg);
+            }
         }
+        this.queue = kept;
     }
 
-    // ============================================
-    // 📊 الإحصائيات
-    // ============================================
-    getStats() {
+    _sleep(ms) {
+        return new Promise(r => setTimeout(r, ms));
+    }
+
+    // ===================================
+    // الإحصائيات
+    // ===================================
+    getStatus() {
+        const spamActive = Date.now() < this.spamUntil;
         return {
-            ...this.stats,
-            queued: this.queue.length,
-            paused: this.paused,
-            pausedUntil: this.paused ? new Date(this.pausedUntil).toLocaleString('ar-EG') : null,
-            pauseCount: this.pauseCount,
-            consecutiveErrors: this.consecutiveErrors,
-            hourlySent: `${this.hourlySent}/${this.maxPerHour}`,
-            dailySent: `${this.dailySent}/${this.maxPerDay}`,
+            name: this.name,
+            queue: this.queue.length,
             processing: this.processing,
-            shuttingDown: this.shuttingDown
+            restricted: this._isRestricted(),
+            restrictionUntil: this.restrictionUntil || null,
+            spamMode: spamActive,
+            spamUntil: spamActive ? new Date(this.spamUntil).toISOString() : null,
+            hourly: `${this.hourlySent}/${this.maxPerHour}`,
+            daily: `${this.dailySent}/${this.maxPerDay}`,
+            stats: { ...this.stats }
         };
     }
 
-    // ============================================
-    // 🩺 Monitor دوري
-    // ============================================
     startMonitor(intervalMs = 5 * 60 * 1000) {
         this._monitorInterval = setInterval(() => {
-            const stats = this.getStats();
-            if (stats.sent > 0 || stats.queued > 0 || stats.paused) {
+            const s = this.getStatus();
+            if (s.stats.sent > 0 || s.queue > 0 || s.restricted) {
                 console.log(
-                    `📊 [${this.name}] ✅ ${stats.sent} | ❌ ${stats.failed} | ` +
-                    `🗑️ ${stats.dropped} | ⏳ ${stats.queued} | ` +
-                    `⏰ ${stats.hourlySent} | ${stats.paused ? '⏸️' : '▶️'}`
+                    `📊 [${this.name}] ✅ ${s.stats.sent} | ❌ ${s.stats.failed} | ` +
+                    `🗑️ ${s.stats.dropped} | ⏳ ${s.queue} | ` +
+                    `⏰ ${s.hourly} | ${s.restricted ? '🛑' : s.spamMode ? '🚨' : '▶️'}`
                 );
             }
         }, intervalMs);
     }
 
-    // ============================================
-    // 🔄 استئناف يدوي
-    // ============================================
-    resume() {
-        if (this.paused) {
-            this.paused = false;
-            this.pausedUntil = 0;
-            this.pauseCount = 0;
-            this.consecutiveErrors = 0;
-            console.log(`▶️ [${this.name}] استئناف يدوي`);
-            this._processQueue();
-        }
-    }
-
-    // ============================================
-    // 🛑 إيقاف آمن (Graceful Shutdown)
-    // ============================================
-    async shutdown(timeoutMs = 30000) {
-        console.log(`🛑 [${this.name}] بدء إيقاف آمن...`);
-        this.shuttingDown = true;
-
-        const start = Date.now();
-        while (this.queue.length > 0 && Date.now() - start < timeoutMs) {
-            await new Promise(r => setTimeout(r, 1000));
-        }
-
-        clearInterval(this._cleanupInterval);
+    async shutdown() {
+        console.log(`🛑 [${this.name}] إيقاف...`);
         if (this._monitorInterval) clearInterval(this._monitorInterval);
 
-        const remaining = this.queue.length;
-        console.log(`🛑 [${this.name}] تم الإيقاف (${remaining} رسالة معلقة)`);
+        for (const msg of this.queue.splice(0)) {
+            this.stats.dropped++;
+            msg.reject(new Error('Shutdown'));
+        }
     }
-                      }
+}
